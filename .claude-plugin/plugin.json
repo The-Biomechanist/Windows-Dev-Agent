@@ -3,11 +3,11 @@
   "description": "Windows-native agent orchestration. PowerShell-first execution, WinGet package management, environment discovery, safety-gated workflow synthesis, and sandbox routing. Includes /defrag to absorb or replace your existing extensions, MCPs, and agent configs.",
   "version": "0.2.0",
   "author": {
-    "name": "ahmiershadowman",
-    "url": "https://github.com/ahmiershadowman-commits/Windows-Dev-Agent"
+    "name": "The-Biomechanist",
+    "url": "https://github.com/The-Biomechanist"
   },
-  "homepage": "https://github.com/ahmiershadowman-commits/Windows-Dev-Agent",
-  "repository": "https://github.com/ahmiershadowman-commits/Windows-Dev-Agent",
+  "homepage": "https://github.com/The-Biomechanist/Windows-Dev-Agent",
+  "repository": "https://github.com/The-Biomechanist/Windows-Dev-Agent",
   "license": "MIT",
   "keywords": ["windows", "powershell", "winget", "wsl", "hyper-v", "sandbox", "agentic", "orchestration", "defrag"],
   "minClaudeCodeVersion": "1.0.33"
