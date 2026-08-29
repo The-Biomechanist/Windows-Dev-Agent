@@ -5,7 +5,7 @@ targets:
   - claude
   - codex
   - opencode
-homepage: https://github.com/ahmiershadowman-commits/Windows-Dev-Agent
+homepage: https://github.com/The-Biomechanist/Windows-Dev-Agent
 license: MIT
 keywords:
   - windows
