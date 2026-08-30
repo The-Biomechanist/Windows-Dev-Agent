@@ -1,4 +1,4 @@
-"""Contract tests for minimal, provenance-bound audit state."""
+"""Contracts for minimal, provenance-bound audit state."""
 
 import json
 from pathlib import Path
@@ -6,23 +6,44 @@ from pathlib import Path
 from src.observability import audit_report, trace
 
 
-def test_trace_persists_metadata_not_tool_payloads():
+def _hook(tool_input, tool_response=None, event="PostToolUse"):
+    return {
+        "hook_event_name": event,
+        "session_id": "s1",
+        "tool_name": "mcp__windows-dev-agent__package_install",
+        "tool_use_id": "u1",
+        "tool_input": tool_input,
+        "tool_response": tool_response,
+    }
+
+
+def test_trace_persists_derived_metadata_not_payloads():
     event = trace.event_from_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": "s1",
-            "tool_name": "mcp__plugin_windows-dev-agent_windows-dev-agent__package_search",
-            "tool_use_id": "u1",
-            "tool_input": {"query": "secret-value", "TOKEN": "definitely-secret"},
-            "tool_response": {"stdout": "another-secret"},
-        }
+        _hook(
+            {"execute": True, "package_id": "secret-value"},
+            {"content": [{"type": "text", "text": json.dumps({"status": "completed", "succeeded": True, "stdout": "another-secret"})}]},
+        )
     )
-    assert event["session_id"] == "s1"
-    assert event["tool_name"].endswith("package_search")
-    assert "tool_input" not in event
-    assert "tool_response" not in event
-    assert "secret-value" not in json.dumps(event)
-    assert "another-secret" not in json.dumps(event)
+    assert event["execution_outcome"] == "succeeded"
+    assert event["result_status"] == "completed"
+    serialized = json.dumps(event)
+    assert "tool_input" not in event and "tool_response" not in event
+    assert "secret-value" not in serialized
+    assert "another-secret" not in serialized
+
+
+def test_execution_outcome_preserves_plan_success_failure_launch_and_unknown():
+    assert trace.derive_execution_outcome(_hook({"execute": False}))[0] == "not_executed"
+    assert trace.derive_execution_outcome(
+        _hook({"execute": True}, {"content": [{"type": "text", "text": '{"status":"completed","succeeded":true}'}]})
+    )[0] == "succeeded"
+    assert trace.derive_execution_outcome(
+        _hook({"execute": True}, {"content": [{"type": "text", "text": '{"status":"completed","succeeded":false}'}]})
+    )[0] == "failed"
+    assert trace.derive_execution_outcome(
+        _hook({"execute": True}, {"content": [{"type": "text", "text": '{"status":"launched"}'}]})
+    )[0] == "unknown"
+    assert trace.derive_execution_outcome(_hook({"execute": True}, None))[0] == "unknown"
 
 
 def test_session_filter_never_launders_other_session_events(tmp_path: Path):
@@ -30,37 +51,48 @@ def test_session_filter_never_launders_other_session_events(tmp_path: Path):
     log.write_text(
         "\n".join(
             [
-                json.dumps({"session_id": "a", "event": "PostToolUse", "success": True, "tool_name": "one"}),
-                json.dumps({"session_id": "b", "event": "PostToolUseFailure", "success": False, "tool_name": "two"}),
+                json.dumps({"session_id": "a", "event": "PostToolUse", "execution_outcome": "unknown", "tool_name": "one"}),
+                json.dumps({"session_id": "b", "event": "PostToolUse", "execution_outcome": "failed", "tool_name": "two"}),
             ]
-        )
-        + "\n",
+        ) + "\n",
         encoding="utf-8",
     )
     events = audit_report.load_events(log, session_id="a")
+    summary = audit_report.summarize(events)
     assert len(events) == 1
-    assert events[0]["tool_name"] == "one"
-    assert audit_report.summarize(events)["failures"] == 0
+    assert summary["execution_failed"] == 0
+    assert summary["execution_unknown"] == 1
 
 
-def test_permission_denial_is_not_counted_as_execution_failure():
+def test_permission_event_is_not_counted_as_execution_attempt():
     summary = audit_report.summarize(
-        [
-            {
-                "event": "PreToolUse",
-                "success": None,
-                "permission_denied": True,
-                "permission_decision": "deny",
-                "tool_name": "PowerShell",
-            }
-        ]
+        [{
+            "event": "PreToolUse",
+            "execution_outcome": "not_applicable",
+            "permission_denied": True,
+            "permission_decision": "deny",
+            "tool_name": "PowerShell",
+        }]
     )
-    assert summary["failures"] == 0
+    assert summary["execution_failed"] == 0
+    assert summary["execution_unknown"] == 0
+    assert summary["not_executed"] == 0
+    assert summary["not_applicable"] == 1
     assert summary["permission_denials"] == 1
-    assert summary["last_denied_tool"] == "PowerShell"
 
 
-def test_unfiltered_audit_is_explicitly_history_surface(tmp_path: Path):
+def test_log_rotation_bounds_persistent_history(tmp_path: Path, monkeypatch):
     log = tmp_path / "agent.log"
-    log.write_text(json.dumps({"session_id": "a", "event": "PostToolUse", "success": True}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(trace, "MAX_LOG_BYTES", 30)
+    trace.append_event({"one": "x" * 40}, log)
+    trace.append_event({"two": "y"}, log)
+    assert log.is_file()
+    assert log.with_name("agent.log.1").is_file()
+    assert "one" in log.with_name("agent.log.1").read_text(encoding="utf-8")
+    assert "two" in log.read_text(encoding="utf-8")
+
+
+def test_unfiltered_audit_is_explicit_history_surface(tmp_path: Path):
+    log = tmp_path / "agent.log"
+    log.write_text(json.dumps({"session_id": "a", "event": "PostToolUse", "execution_outcome": "unknown"}) + "\n", encoding="utf-8")
     assert len(audit_report.load_events(log)) == 1

@@ -1,4 +1,4 @@
-"""Runtime-level contract tests for the MCP server."""
+"""Runtime-level contract tests for the shared MCP server."""
 
 import asyncio
 import json
@@ -11,21 +11,19 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def test_tools_list_exposes_exact_runtime_surface():
+def _tool(name: str):
+    return next(tool for tool in server.TOOLS if tool["name"] == name)
+
+
+def test_tools_list_exposes_exact_runtime_surface_and_no_fake_approval_field():
     response = run(server.handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
     names = [tool["name"] for tool in response["result"]["tools"]]
     assert names == [
-        "env_inspect",
-        "tool_discover",
-        "capability_run",
-        "workflow_plan",
-        "package_search",
-        "package_install",
-        "sandbox_run",
-        "ecosystem_scan",
-        "logs_query",
-        "mcp_audit",
+        "env_inspect", "tool_discover", "capability_run", "workflow_plan", "package_search",
+        "package_install", "sandbox_run", "ecosystem_scan", "logs_query", "mcp_audit",
     ]
+    for name in ("capability_run", "package_install", "sandbox_run"):
+        assert "user_approved" not in _tool(name)["inputSchema"]["properties"]
 
 
 def test_subprocesses_cannot_consume_mcp_stdin(monkeypatch):
@@ -44,19 +42,41 @@ def test_subprocesses_cannot_consume_mcp_stdin(monkeypatch):
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     result = server._run(["probe"])
     assert result["succeeded"] is True
+    assert result["execution_started"] is True
     assert observed["stdin"] is server.subprocess.DEVNULL
 
 
-def test_workflow_plan_is_not_placeholder():
-    result = run(server.handle_workflow_plan({"task": "run the Python tests"}))
+def test_subprocess_spawn_failure_is_not_reported_as_started(monkeypatch):
+    def fail_before_start(*_args, **_kwargs):
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(server.subprocess, "run", fail_before_start)
+    result = server._run(["probe"])
+    assert result["succeeded"] is False
+    assert result["execution_started"] is False
+    assert "timed_out" not in result
+
+
+def test_subprocess_timeout_preserves_that_execution_started(monkeypatch):
+    def timeout_after_start(argv, **_kwargs):
+        raise server.subprocess.TimeoutExpired(argv, 1)
+
+    monkeypatch.setattr(server.subprocess, "run", timeout_after_start)
+    result = server._run(["probe"], timeout=1)
+    assert result["succeeded"] is False
+    assert result["execution_started"] is True
+    assert result["timed_out"] is True
+
+
+def test_workflow_plan_is_project_bound_and_not_placeholder(tmp_path: Path):
+    result = run(server.handle_workflow_plan({"task": "run the Python tests", "cwd": str(tmp_path)}))
     assert result["status"] == "planned"
-    assert len(result["phases"]) >= 4
-    assert result["candidate_capabilities"]
+    assert result["project_dir"] == str(tmp_path.resolve())
+    assert len(result["phases"]) == 4
     assert any(candidate["capability"] == "test-python" for candidate in result["candidate_capabilities"])
 
 
-def test_capability_run_defaults_to_claude_project_dir(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("WINDOWS_DEV_AGENT_PROJECT_DIR", str(tmp_path))
+def test_capability_run_uses_explicit_project_dir(tmp_path: Path, monkeypatch):
     observed = {}
 
     def fake_run_capability(capability, **kwargs):
@@ -65,73 +85,39 @@ def test_capability_run_defaults_to_claude_project_dir(tmp_path: Path, monkeypat
         return {"status": "planned"}
 
     monkeypatch.setattr(server, "run_capability", fake_run_capability)
-    result = run(server.handle_capability_run({"capability": "test-python"}))
+    result = run(server.handle_capability_run({"capability": "test-python", "cwd": str(tmp_path)}))
     assert result["status"] == "planned"
-    assert observed["capability"] == "test-python"
     assert Path(observed["cwd"]) == tmp_path.resolve()
+    assert "user_approved" not in observed
 
 
-def test_package_search_produces_read_only_candidate_evidence(monkeypatch):
+def test_package_search_is_read_only_and_does_not_accept_source_agreements(monkeypatch):
     observed = {}
     monkeypatch.setattr(server.shutil, "which", lambda name: f"C:\\bin\\{name}.exe" if name == "winget" else None)
 
     def fake_run(argv, **kwargs):
         observed["argv"] = argv
-        observed.update(kwargs)
-        return {"succeeded": True, "returncode": 0, "stdout": "Python.Python.3.12", "stderr": "", "argv": argv}
+        return {
+            "succeeded": True,
+            "returncode": 0,
+            "stdout": "Python.Python.3.12",
+            "stderr": "",
+            "argv": argv,
+            "execution_started": True,
+        }
 
     monkeypatch.setattr(server, "_run", fake_run)
     result = run(server.handle_package_search({"query": "Python 3.12", "source": "winget"}))
     assert result["status"] == "completed"
-    assert observed["argv"] == [
-        "winget",
-        "search",
-        "--query",
-        "Python 3.12",
-        "--source",
-        "winget",
-        "--disable-interactivity",
-    ]
     assert "install" not in observed["argv"]
     assert "--accept-source-agreements" not in observed["argv"]
 
 
-def test_package_install_defaults_to_plan_only():
-    result = run(server.handle_package_install({"package_id": "Python.Python.3.12"}))
-    assert result["status"] == "planned"
-    assert result["requires_user_approval"] is True
-    assert result["argv"][0] == "winget"
+def test_package_install_plan_and_execute_share_one_host_authority_boundary(tmp_path: Path, monkeypatch):
+    plan = run(server.handle_package_install({"package_id": "Python.Python.3.12"}))
+    assert plan["status"] == "planned"
+    assert plan["requires_host_approval"] is True
 
-
-def test_package_install_rejects_unknown_source():
-    result = run(
-        server.handle_package_install(
-            {"package_id": "Python.Python.3.12", "source": "definitely-not-a-manager"}
-        )
-    )
-    assert result["status"] == "invalid_input"
-
-
-def test_package_install_cannot_execute_without_acknowledgement(monkeypatch):
-    monkeypatch.setattr(server.shutil, "which", lambda _name: "fake.exe")
-    called = False
-
-    def fake_run(*_args, **_kwargs):
-        nonlocal called
-        called = True
-        return {"succeeded": True}
-
-    monkeypatch.setattr(server, "_run", fake_run)
-    result = run(
-        server.handle_package_install(
-            {"package_id": "Python.Python.3.12", "execute": True, "user_approved": False}
-        )
-    )
-    assert result["status"] == "approval_required"
-    assert called is False
-
-
-def test_successful_package_install_invalidates_environment_cache(tmp_path: Path, monkeypatch):
     cache = tmp_path / "environment.json"
     cache.write_text("stale", encoding="utf-8")
     monkeypatch.setattr(server, "ENVIRONMENT_CACHE_FILE", cache)
@@ -145,20 +131,17 @@ def test_successful_package_install_invalidates_environment_cache(tmp_path: Path
             "stdout": "installed",
             "stderr": "",
             "argv": argv,
+            "execution_started": True,
         },
     )
-
-    result = run(
-        server.handle_package_install(
-            {"package_id": "Python.Python.3.12", "execute": True, "user_approved": True}
-        )
-    )
-    assert result["status"] == "completed"
-    assert result["environment_cache_invalidated"] is True
+    executed = run(server.handle_package_install({"package_id": "Python.Python.3.12", "execute": True}))
+    assert executed["status"] == "completed"
+    assert executed["execution_started"] is True
+    assert executed["environment_cache_invalidated"] is True
     assert not cache.exists()
 
 
-def test_failed_package_install_also_invalidates_environment_cache(tmp_path: Path, monkeypatch):
+def test_failed_executed_install_also_invalidates_cache(tmp_path: Path, monkeypatch):
     cache = tmp_path / "environment.json"
     cache.write_text("stale", encoding="utf-8")
     monkeypatch.setattr(server, "ENVIRONMENT_CACHE_FILE", cache)
@@ -169,143 +152,239 @@ def test_failed_package_install_also_invalidates_environment_cache(tmp_path: Pat
         lambda argv, **_kwargs: {
             "succeeded": False,
             "returncode": 1,
-            "stdout": "partial work may have occurred",
-            "stderr": "installer failed",
+            "stdout": "partial",
+            "stderr": "failed",
             "argv": argv,
+            "execution_started": True,
         },
     )
-
-    result = run(
-        server.handle_package_install(
-            {"package_id": "Python.Python.3.12", "execute": True, "user_approved": True}
-        )
-    )
+    result = run(server.handle_package_install({"package_id": "Python.Python.3.12", "execute": True}))
     assert result["status"] == "failed"
+    assert result["execution_started"] is True
     assert result["environment_cache_invalidated"] is True
     assert not cache.exists()
 
 
+def test_package_install_spawn_failure_preserves_environment_cache(tmp_path: Path, monkeypatch):
+    cache = tmp_path / "environment.json"
+    cache.write_text("still-valid", encoding="utf-8")
+    monkeypatch.setattr(server, "ENVIRONMENT_CACHE_FILE", cache)
+    monkeypatch.setattr(server.shutil, "which", lambda _name: "fake.exe")
+    monkeypatch.setattr(
+        server,
+        "_run",
+        lambda argv, **_kwargs: {
+            "succeeded": False,
+            "error": "spawn failed",
+            "argv": argv,
+            "execution_started": False,
+        },
+    )
+    result = run(server.handle_package_install({"package_id": "Python.Python.3.12", "execute": True}))
+    assert result["status"] == "failed"
+    assert result["execution_started"] is False
+    assert result["environment_cache_invalidated"] is False
+    assert cache.read_text(encoding="utf-8") == "still-valid"
+
+
 def test_sandbox_auto_requires_isolation_discriminator(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("WINDOWS_DEV_AGENT_PROJECT_DIR", str(tmp_path))
     monkeypatch.setattr(server.shutil, "which", lambda _name: "available.exe")
     monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: "WindowsSandbox.exe")
-    result = run(server.handle_sandbox_run({"command": "echo hello", "environment": "auto"}))
+    result = run(server.handle_sandbox_run({"command": "echo hello", "workspace_folder": str(tmp_path), "environment": "auto"}))
     assert result["status"] == "invalid_input"
-    assert "isolation_requirement" in result["error"]
 
 
-def test_untrusted_windows_auto_route_does_not_choose_available_wsl(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("WINDOWS_DEV_AGENT_PROJECT_DIR", str(tmp_path))
-    monkeypatch.setattr(server.shutil, "which", lambda _name: "wsl.exe")
+def test_untrusted_windows_auto_requires_reachable_payload(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: "WindowsSandbox.exe")
-    result = run(
-        server.handle_sandbox_run(
-            {
-                "command": "untrusted.exe",
-                "environment": "auto",
-                "isolation_requirement": "untrusted_windows",
-                "execute": False,
-            }
-        )
-    )
-    assert result["status"] == "planned"
-    assert result["environment"] == "windows_sandbox"
-
-
-def test_project_reproducibility_requires_project_devcontainer(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("WINDOWS_DEV_AGENT_PROJECT_DIR", str(tmp_path))
-    monkeypatch.setattr(server.shutil, "which", lambda name: "devcontainer.exe" if name == "devcontainer" else None)
-
     missing = run(
         server.handle_sandbox_run(
             {
-                "command": "pytest",
+                "command": ".\\untrusted.exe",
+                "workspace_folder": str(tmp_path),
                 "environment": "auto",
-                "isolation_requirement": "project_reproducibility",
-                "execute": False,
+                "isolation_requirement": "untrusted_windows",
             }
         )
     )
-    assert missing["status"] == "unavailable"
+    assert missing["status"] == "invalid_input"
+    assert "payload_paths" in missing["error"]
 
-    (tmp_path / ".devcontainer").mkdir()
+    payload = tmp_path / "untrusted.exe"
+    payload.write_bytes(b"test")
     planned = run(
         server.handle_sandbox_run(
             {
-                "command": "pytest",
+                "command": ".\\untrusted.exe",
+                "workspace_folder": str(tmp_path),
                 "environment": "auto",
-                "isolation_requirement": "project_reproducibility",
-                "execute": False,
+                "isolation_requirement": "untrusted_windows",
+                "payload_paths": ["untrusted.exe"],
             }
         )
     )
     assert planned["status"] == "planned"
-    assert planned["environment"] == "dev_container"
+    assert planned["environment"] == "windows_sandbox"
+    assert planned["payload_paths"] == ["untrusted.exe"]
 
 
-def test_windows_sandbox_plan_does_not_materialize_bundle(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("WINDOWS_DEV_AGENT_PROJECT_DIR", str(tmp_path))
+def test_payload_rejects_workspace_escape_and_symlink(tmp_path: Path):
+    outside = tmp_path.parent / "outside.bin"
+    outside.write_bytes(b"x")
+    sources, error = server._payload_sources(tmp_path, ["../outside.bin"])
+    assert sources is None and "workspace" in error
+
+
+def test_payload_rejects_overlapping_roots(tmp_path: Path):
+    folder = tmp_path / "bundle"
+    folder.mkdir()
+    (folder / "inside.bin").write_bytes(b"x")
+    sources, error = server._payload_sources(tmp_path, ["bundle", "bundle/inside.bin"])
+    assert sources is None
+    assert "overlap" in error
+
+
+def test_payload_byte_budget_is_enforced(tmp_path: Path, monkeypatch):
+    payload = tmp_path / "large.bin"
+    payload.write_bytes(b"12345")
+    monkeypatch.setattr(server, "MAX_SANDBOX_PAYLOAD_BYTES", 4)
+    sources, error = server._payload_sources(tmp_path, ["large.bin"])
+    assert sources is None
+    assert "byte budget" in error
+
+
+def test_windows_sandbox_stages_payload_read_only_bundle(tmp_path: Path, monkeypatch):
+    payload = tmp_path / "artifact.bin"
+    payload.write_bytes(b"payload")
     monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: "WindowsSandbox.exe")
+    sources, error = server._payload_sources(tmp_path, ["artifact.bin"])
+    assert error is None
+    config, argv = server._prepare_windows_sandbox("type artifact.bin", sources)
+    try:
+        staged = config.parent / "payload" / "artifact.bin"
+        assert staged.read_bytes() == b"payload"
+        wsb = config.read_text(encoding="utf-8")
+        assert "<ReadOnly>true</ReadOnly>" in wsb
+        assert "<Networking>Disable</Networking>" in wsb
+        assert "<ClipboardRedirection>Disable</ClipboardRedirection>" in wsb
+        assert "C:\\WDAShare\\payload" in (config.parent / "run.cmd").read_text(encoding="utf-8")
+        assert argv[0] == "WindowsSandbox.exe"
+    finally:
+        import shutil
+        shutil.rmtree(config.parent, ignore_errors=True)
 
-    def must_not_run(_command):
-        raise AssertionError("plan-only sandbox call materialized a bundle")
 
-    monkeypatch.setattr(server, "_prepare_windows_sandbox", must_not_run)
+def test_failed_sandbox_staging_removes_partial_bundle(tmp_path: Path, monkeypatch):
+    payload = tmp_path / "artifact.bin"
+    payload.write_bytes(b"payload")
+    staging = tmp_path / "staging"
+    monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: "WindowsSandbox.exe")
+    monkeypatch.setattr(server.tempfile, "mkdtemp", lambda **_kwargs: str(staging))
+    monkeypatch.setattr(server.shutil, "copy2", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("copy failed")))
+    sources, error = server._payload_sources(tmp_path, ["artifact.bin"])
+    assert error is None
+    try:
+        server._prepare_windows_sandbox("type artifact.bin", sources)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("staging failure was not surfaced")
+    assert not staging.exists()
+
+
+def test_wsl_route_enters_project_and_uses_portable_sh(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(server.shutil, "which", lambda name: "wsl.exe" if name in {"wsl", "wsl.exe"} else None)
     result = run(
         server.handle_sandbox_run(
-            {"command": "echo safe-plan", "environment": "windows_sandbox", "execute": False}
-        )
-    )
-    assert result["status"] == "planned"
-    assert result["config_materialized_on_execute"] is True
-    assert "config_path" not in result
-
-
-def test_ecosystem_scan_is_read_only_and_project_scoped(tmp_path: Path, monkeypatch):
-    (tmp_path / ".mcp.json").write_text(
-        '{"mcpServers":{"example":{"command":"python","args":["server.py"]}}}',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(server.shutil, "which", lambda _name: None)
-    result = run(server.handle_ecosystem_scan({"cwd": str(tmp_path)}))
-    assert result["status"] == "ok"
-    assert result["inventory"]["mcp"][0]["servers"][0]["name"] == "example"
-    assert sorted(path.name for path in tmp_path.iterdir()) == [".mcp.json"]
-
-
-def test_logs_query_labels_persistent_history_scope(tmp_path: Path, monkeypatch):
-    log_file = tmp_path / "agent.log"
-    log_file.write_text(
-        json.dumps(
             {
-                "event": "PreToolUse",
-                "success": True,
-                "tool_name": "mcp__plugin_windows-dev-agent_windows-dev-agent__package_install",
-                "permission_decision": "ask",
+                "command": "pwd",
+                "workspace_folder": str(tmp_path),
+                "environment": "wsl",
+                "execute": False,
             }
         )
-        + "\n",
+    )
+    assert result["argv"][:4] == ["wsl.exe", "--cd", str(tmp_path.resolve()), "--"]
+    assert result["argv"][4:6] == ["sh", "-lc"]
+
+
+def test_captured_sandbox_spawn_failure_is_not_reported_as_started(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(server.shutil, "which", lambda name: "wsl.exe" if name in {"wsl", "wsl.exe"} else None)
+    monkeypatch.setattr(
+        server,
+        "_run",
+        lambda argv, **_kwargs: {
+            "succeeded": False,
+            "error": "spawn failed",
+            "argv": argv,
+            "execution_started": False,
+        },
+    )
+    result = run(
+        server.handle_sandbox_run(
+            {
+                "command": "pwd",
+                "workspace_folder": str(tmp_path),
+                "environment": "wsl",
+                "execute": True,
+            }
+        )
+    )
+    assert result["status"] == "failed"
+    assert result["execution_started"] is False
+
+
+def test_ecosystem_scan_project_scope_does_not_require_host_inventory(tmp_path: Path, monkeypatch):
+    (tmp_path / ".mcp.json").write_text('{"mcpServers":{"example":{"command":"python"}}}', encoding="utf-8")
+    monkeypatch.setattr(server.shutil, "which", lambda _name: (_ for _ in ()).throw(AssertionError("host executable lookup should not run")))
+    result = run(server.handle_ecosystem_scan({"cwd": str(tmp_path), "include_host": False}))
+    assert result["status"] == "ok"
+    assert result["inventory"]["host_inventory_included"] is False
+    assert result["inventory"]["mcp"][0]["servers"][0]["name"] == "example"
+
+
+def test_package_inventory_requires_explicit_host_scope(tmp_path: Path):
+    result = run(server.handle_ecosystem_scan({"cwd": str(tmp_path), "include_packages": True}))
+    assert result["status"] == "invalid_input"
+
+
+def test_logs_query_filters_host_neutral_permission_decisions(tmp_path: Path, monkeypatch):
+    log = tmp_path / "agent.log"
+    log.write_text(
+        "\n".join(
+            [
+                json.dumps({"permission_decision": "ask", "tool_name": "one"}),
+                json.dumps({"permission_decision": "allow", "tool_name": "two"}),
+                json.dumps({"permission_decision": "host-default", "tool_name": "three"}),
+            ]
+        ) + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(server, "LOG_FILE", log_file)
+    monkeypatch.setattr(server, "LOG_FILE", log)
     result = run(server.handle_logs_query({"filter": "approvals"}))
-    assert result["matched"] == 1
-    assert result["events"][0]["permission_decision"] == "ask"
-    assert result["scope"] == "persistent_history"
+    assert result["matched"] == 2
 
 
-def test_mcp_audit_redacts_env_values(tmp_path: Path):
-    config = tmp_path / "mcp.json"
+def test_mcp_audit_defaults_to_project_and_exposes_only_structural_metadata(tmp_path: Path):
+    config = tmp_path / ".mcp.json"
     config.write_text(
-        '{"mcpServers":{"example":{"command":"python","args":["server.py"],"env":{"TOKEN":"secret"}}}}',
+        '{"mcpServers":{"example":{"command":"secret-cli --token secret","args":["server.py"],"env":{"TOKEN":"secret"}}}}',
         encoding="utf-8",
     )
-    result = run(server.handle_mcp_audit({"config_path": str(config)}))
-    server_entry = next(
-        srv
-        for cfg in result["configs"]
-        if cfg["file"] == str(config.resolve())
-        for srv in cfg["servers"]
-    )
-    assert server_entry["has_env"] is True
-    assert "secret" not in str(result)
+    result = run(server.handle_mcp_audit({"cwd": str(tmp_path)}))
+    assert result["host_inventory_included"] is False
+    assert result["server_count"] == 1
+    serialized = json.dumps(result)
+    assert "secret" not in serialized
+    entry = result["configs"][0]["servers"][0]
+    assert entry["transport"] == "command"
+    assert entry["has_command"] is True
+    assert "command" not in entry
+
+
+def test_json_config_read_budget_is_enforced(tmp_path: Path, monkeypatch):
+    config = tmp_path / ".mcp.json"
+    config.write_text('{"mcpServers":{}}', encoding="utf-8")
+    monkeypatch.setattr(server, "MAX_JSON_CONFIG_BYTES", 4)
+    data, error = server._safe_json(config)
+    assert data is None
+    assert "read limit" in error

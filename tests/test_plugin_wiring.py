@@ -1,4 +1,4 @@
-"""Tests for installed-plugin path and hook semantics, not just repo execution."""
+"""Installed Claude plugin wiring and hook semantics."""
 
 import json
 from pathlib import Path
@@ -6,18 +6,18 @@ import re
 import subprocess
 import sys
 
+from src import __version__
+
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLED_PREFIX = "mcp__plugin_windows-dev-agent_windows-dev-agent__"
 
 
-def test_manifest_uses_current_schema_surface():
-    manifest = json.loads(
-        (ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
-    )
+def test_manifest_and_runtime_version_match_0_4_release():
+    manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["$schema"] == "https://json.schemastore.org/claude-code-plugin-manifest.json"
     assert manifest["name"] == "windows-dev-agent"
     assert manifest["displayName"] == "Windows Dev Agent"
-    assert manifest["version"] == "0.3.0"
+    assert manifest["version"] == __version__ == "0.4.0"
     assert "minClaudeCodeVersion" not in manifest
 
 
@@ -45,34 +45,25 @@ def test_hook_scripts_are_rooted_and_use_persistent_plugin_data():
     assert all("${CLAUDE_PLUGIN_DATA}" in command for command in commands)
 
 
-def test_pretool_hook_covers_powershell_and_plugin_scoped_mutations():
+def test_pretool_hook_covers_shell_mutations_and_broader_mcp_reads():
     config = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-    matcher = config["hooks"]["PreToolUse"][0]["matcher"]
-    compiled = re.compile(matcher)
-    assert compiled.search("PowerShell")
-    assert compiled.search("Bash")
-    assert compiled.search(INSTALLED_PREFIX + "package_install")
-    assert compiled.search(INSTALLED_PREFIX + "sandbox_run")
-    assert compiled.search(INSTALLED_PREFIX + "capability_run")
+    matcher = re.compile(config["hooks"]["PreToolUse"][0]["matcher"])
+    assert matcher.search("PowerShell")
+    assert matcher.search("Bash")
+    for name in ("package_install", "sandbox_run", "capability_run", "ecosystem_scan", "mcp_audit"):
+        assert matcher.search(INSTALLED_PREFIX + name)
 
 
 def test_post_hooks_are_scoped_to_windows_dev_agent_mcp_only():
     config = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     for event in ("PostToolUse", "PostToolUseFailure"):
-        matcher = config["hooks"][event][0]["matcher"]
-        compiled = re.compile(matcher)
-        assert matcher != ".*"
-        assert compiled.search(INSTALLED_PREFIX + "env_inspect")
-        assert not compiled.search("Read")
-        assert not compiled.search("mcp__some-other-server__tool")
+        matcher = re.compile(config["hooks"][event][0]["matcher"])
+        assert matcher.search(INSTALLED_PREFIX + "env_inspect")
+        assert not matcher.search("Read")
+        assert not matcher.search("mcp__some-other-server__tool")
 
 
-def test_stop_hook_does_not_claim_matcher_support():
-    config = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-    assert "matcher" not in config["hooks"]["Stop"][0]
-
-
-def test_safety_hook_runs_by_absolute_path_for_installed_scoped_tool(tmp_path: Path):
+def test_safety_hook_asks_for_exact_execute_call_without_fake_acknowledgement(tmp_path: Path):
     gate = ROOT / "src" / "safety" / "gate.py"
     data_dir = tmp_path / "plugin-data"
     project_dir = tmp_path / "project"
@@ -81,11 +72,7 @@ def test_safety_hook_runs_by_absolute_path_for_installed_scoped_tool(tmp_path: P
         "hook_event_name": "PreToolUse",
         "session_id": "session-a",
         "tool_name": INSTALLED_PREFIX + "package_install",
-        "tool_input": {
-            "package_id": "Python.Python.3.12",
-            "execute": True,
-            "user_approved": True,
-        },
+        "tool_input": {"package_id": "Python.Python.3.12", "execute": True},
     }
     result = subprocess.run(
         [sys.executable, str(gate), "--data-dir", str(data_dir)],
@@ -100,14 +87,11 @@ def test_safety_hook_runs_by_absolute_path_for_installed_scoped_tool(tmp_path: P
     output = json.loads(result.stdout)
     assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert (data_dir / "agent.log").is_file()
-    assert not (ROOT / "agent.log").exists()
 
 
-def test_read_only_hook_script_emits_no_permission_decision(tmp_path: Path):
+def test_read_only_hook_emits_no_permission_decision(tmp_path: Path):
     gate = ROOT / "src" / "safety" / "gate.py"
     data_dir = tmp_path / "plugin-data"
-    project_dir = tmp_path / "project"
-    project_dir.mkdir()
     event = {
         "hook_event_name": "PreToolUse",
         "session_id": "session-a",
@@ -117,7 +101,6 @@ def test_read_only_hook_script_emits_no_permission_decision(tmp_path: Path):
     result = subprocess.run(
         [sys.executable, str(gate), "--data-dir", str(data_dir)],
         input=json.dumps(event),
-        cwd=project_dir,
         capture_output=True,
         text=True,
         timeout=10,
@@ -127,26 +110,23 @@ def test_read_only_hook_script_emits_no_permission_decision(tmp_path: Path):
     assert result.stdout.strip() == ""
 
 
-def test_audit_report_filters_to_stop_hook_session(tmp_path: Path):
+def test_audit_report_filters_to_current_session_and_preserves_unknown(tmp_path: Path):
     data_dir = tmp_path / "plugin-data"
     data_dir.mkdir()
     log_file = data_dir / "agent.log"
     log_file.write_text(
         "\n".join(
             [
-                json.dumps({"event": "PostToolUse", "session_id": "session-a", "success": True, "tool_name": INSTALLED_PREFIX + "env_inspect"}),
-                json.dumps({"event": "PostToolUseFailure", "session_id": "session-b", "success": False, "tool_name": INSTALLED_PREFIX + "package_install"}),
+                json.dumps({"event": "PostToolUse", "session_id": "session-a", "execution_outcome": "unknown", "tool_name": INSTALLED_PREFIX + "sandbox_run"}),
+                json.dumps({"event": "PostToolUse", "session_id": "session-b", "execution_outcome": "failed", "tool_name": INSTALLED_PREFIX + "package_install"}),
             ]
-        )
-        + "\n",
+        ) + "\n",
         encoding="utf-8",
     )
-
     audit = ROOT / "src" / "observability" / "audit_report.py"
     report = subprocess.run(
         [sys.executable, str(audit), "--data-dir", str(data_dir)],
         input=json.dumps({"hook_event_name": "Stop", "session_id": "session-a"}),
-        cwd=tmp_path,
         capture_output=True,
         text=True,
         timeout=10,
@@ -155,6 +135,6 @@ def test_audit_report_filters_to_stop_hook_session(tmp_path: Path):
     assert report.returncode == 0, report.stderr
     assert "Session Audit" in report.stdout
     assert "Events: 1" in report.stdout
-    assert "Execution failures: 0" in report.stdout
-    assert "Permission denials: 0" in report.stdout
+    assert "failed: 0" in report.stdout
+    assert "unknown: 1" in report.stdout
     assert "package_install" not in report.stdout

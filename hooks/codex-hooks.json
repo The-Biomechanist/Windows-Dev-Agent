@@ -1,5 +1,5 @@
 {
-  "description": "Codex host hooks for Windows Dev Agent. Codex owns permission prompting; plugin hooks deny forbidden actions and auto-approve only plan-only requests after Codex asks.",
+  "description": "Codex host hooks for Windows Dev Agent. Native Codex policy remains authoritative; trusted hooks deny forbidden actions and auto-approve only plan-first non-executing MCP calls.",
   "hooks": {
     "PreToolUse": [
       {
@@ -24,7 +24,7 @@
             "command": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\"",
             "commandWindows": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\"",
             "timeout": 30,
-            "description": "Allow plan-only calls; defer executing calls to the normal Codex approval prompt"
+            "description": "Allow only plan-first execute=false calls; defer execution and filesystem inventory reads to Codex approval"
           }
         ]
       }
@@ -38,7 +38,7 @@
             "command": "python \"${PLUGIN_ROOT}/src/observability/codex_trace.py\"",
             "commandWindows": "python \"${PLUGIN_ROOT}/src/observability/codex_trace.py\"",
             "timeout": 30,
-            "description": "Append minimal Codex Windows Dev Agent completion metadata"
+            "description": "Append minimal derived Windows Dev Agent completion metadata"
           }
         ]
       }
@@ -51,7 +51,7 @@
             "command": "python \"${PLUGIN_ROOT}/src/observability/codex_audit_report.py\"",
             "commandWindows": "python \"${PLUGIN_ROOT}/src/observability/codex_audit_report.py\"",
             "timeout": 30,
-            "description": "Emit a Codex-valid Windows Dev Agent session audit summary"
+            "description": "Emit a Codex-valid Windows Dev Agent session audit summary with explicit unknown outcomes"
           }
         ]
       }

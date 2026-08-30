@@ -32,14 +32,11 @@ def _shared_tool_name(tool_name: str) -> str:
     return tool_name
 
 
-def evaluate_hook_event(
-    event: dict[str, Any], *, log_file: Optional[Path] = None
-) -> Optional[dict[str, Any]]:
+def evaluate_hook_event(event: dict[str, Any], *, log_file: Optional[Path] = None) -> Optional[dict[str, Any]]:
     tool_name = str(event.get("tool_name", ""))
     tool_input = event.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
-
     safety_class = classify_tool_call(_shared_tool_name(tool_name), tool_input)
     denied = safety_class == "forbidden"
     target_log = log_file or resolve_log_file(str(resolve_codex_data_dir()))
@@ -49,6 +46,7 @@ def evaluate_hook_event(
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "PreToolUse",
                 "success": None,
+                "execution_outcome": "not_applicable",
                 "permission_denied": denied,
                 "session_id": event.get("session_id"),
                 "tool_name": tool_name,
@@ -61,18 +59,13 @@ def evaluate_hook_event(
         )
     except Exception:
         pass
-
     if not denied:
         return None
-
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                "Windows Dev Agent blocked a forbidden action. Change the task "
-                "boundary explicitly before retrying."
-            ),
+            "permissionDecisionReason": "Windows Dev Agent blocked a forbidden action. Change the task boundary explicitly before retrying.",
             "additionalContext": "windows-dev-agent host=codex safety_class=forbidden",
         }
     }
@@ -82,27 +75,19 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=None)
     args = parser.parse_args()
-
     try:
         event = json.load(sys.stdin)
         if not isinstance(event, dict):
             raise ValueError("hook event must be a JSON object")
     except Exception as exc:
-        print(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": (
-                            f"Windows Dev Agent Codex safety hook could not parse its input: {exc}"
-                        ),
-                    }
-                }
-            )
-        )
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"Windows Dev Agent Codex safety hook could not parse its input: {exc}",
+            }
+        }))
         return 0
-
     log_file = resolve_log_file(args.data_dir) if args.data_dir else None
     output = evaluate_hook_event(event, log_file=log_file)
     if output is not None:

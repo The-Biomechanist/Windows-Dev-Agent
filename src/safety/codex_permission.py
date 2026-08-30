@@ -1,8 +1,10 @@
-"""Codex PermissionRequest adapter for plan-first Windows Dev Agent tools.
+"""Codex PermissionRequest adapter for plan-only Windows Dev Agent calls.
 
-Codex MCP approval policy is tool-scoped. Mutation-capable tools prompt by
-default; this hook allows only plan-only calls after Codex has decided to ask.
-Executing calls make no hook decision and continue to the normal human prompt.
+Codex owns prompting. This hook may auto-allow only plan-first requests whose
+``execute`` flag is false. Project-scoped reads are not auto-approved because
+the plugin cannot independently prove that a caller-supplied directory is the
+active Codex project. Executing mutations and all filesystem inventory reads
+therefore continue to Codex's normal approval UI.
 """
 
 from __future__ import annotations
@@ -23,25 +25,22 @@ from src.runtime_paths import resolve_codex_data_dir
 from src.safety.codex_gate import _shared_tool_name
 from src.safety.gate import classify_tool_call
 
+PREFIX = "mcp__windows_dev_agent__"
 PLAN_FIRST_TOOLS = {
-    "mcp__windows_dev_agent__capability_run",
-    "mcp__windows_dev_agent__package_install",
-    "mcp__windows_dev_agent__sandbox_run",
+    PREFIX + "capability_run",
+    PREFIX + "package_install",
+    PREFIX + "sandbox_run",
 }
 
 
-def evaluate_permission_request(
-    event: dict[str, Any], *, log_file: Optional[Path] = None
-) -> Optional[dict[str, Any]]:
+def evaluate_permission_request(event: dict[str, Any], *, log_file: Optional[Path] = None) -> Optional[dict[str, Any]]:
     tool_name = str(event.get("tool_name", ""))
     tool_input = event.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
-
     safety_class = classify_tool_call(_shared_tool_name(tool_name), tool_input)
     behavior: Optional[str] = None
     message: Optional[str] = None
-
     if safety_class == "forbidden":
         behavior = "deny"
         message = "Windows Dev Agent blocked a forbidden action."
@@ -55,6 +54,7 @@ def evaluate_permission_request(
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "PermissionRequest",
                 "success": None,
+                "execution_outcome": "not_applicable",
                 "permission_denied": behavior == "deny",
                 "session_id": event.get("session_id"),
                 "tool_name": tool_name,
@@ -66,33 +66,24 @@ def evaluate_permission_request(
         )
     except Exception:
         pass
-
     if behavior is None:
         return None
-
     decision: dict[str, Any] = {"behavior": behavior}
     if message:
         decision["message"] = message
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PermissionRequest",
-            "decision": decision,
-        }
-    }
+    return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=None)
     args = parser.parse_args()
-
     try:
         event = json.load(sys.stdin)
         if not isinstance(event, dict):
             raise ValueError("hook event must be a JSON object")
     except Exception:
         return 0
-
     log_file = resolve_log_file(args.data_dir) if args.data_dir else None
     output = evaluate_permission_request(event, log_file=log_file)
     if output is not None:

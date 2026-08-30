@@ -1,8 +1,8 @@
-"""Codex host adapter for the shared Windows Dev Agent MCP runtime.
+"""Codex adapter for the shared Windows Dev Agent MCP runtime.
 
 The shared server owns Windows behavior. This adapter owns only Codex-specific
-host bindings: persistent data, explicit project identity, Codex-facing schemas,
-and Codex plugin/config inventory. Permission prompting remains Codex-owned.
+persistent-data binding, explicit project identity, tool schemas, and optional
+Codex host inventory. Human approval remains Codex-owned.
 """
 
 from __future__ import annotations
@@ -32,11 +32,11 @@ PROJECT_ARG_BY_TOOL = {
 }
 
 CODEX_INSTRUCTIONS = (
-    "Windows Dev Agent Codex adapter. For project-scoped tools, pass the current "
-    "Codex session/project directory explicitly; never use the installed plugin "
-    "cache as the project. Codex owns execution approval through its MCP tool "
-    "approval policy. The MCP user_approved field is defense-in-depth "
-    "acknowledgement only, not proof that permission was granted."
+    "Windows Dev Agent Codex adapter. Pass the current Codex project directory "
+    "explicitly to project-scoped tools; never use the installed plugin cache as "
+    "the project. Codex owns execution approval through MCP/shell policy. Bundled "
+    "hook behavior is additional and is active only after the user trusts the "
+    "plugin hooks; the core mutation tools remain prompt-gated without it."
 )
 
 
@@ -49,14 +49,13 @@ def _codex_tools() -> list[dict[str, Any]]:
             continue
         schema = tool.setdefault("inputSchema", {})
         properties = schema.setdefault("properties", {})
-        properties[project_arg] = {
-            "type": "string",
-            "description": (
-                "Current Codex session/project directory. Required by the Codex "
-                "adapter because the plugin MCP process is rooted in the installed "
-                "plugin cache, not the active project."
-            ),
-        }
+        properties.setdefault(
+            project_arg,
+            {
+                "type": "string",
+                "description": "Current Codex session/project directory; never the installed plugin cache.",
+            },
+        )
         required = list(schema.get("required", []))
         if project_arg not in required:
             required.append(project_arg)
@@ -88,20 +87,12 @@ def _runtime_binding(project: Optional[Path] = None) -> Iterator[None]:
     os.environ["WINDOWS_DEV_AGENT_DATA_DIR"] = str(data_dir)
     if project is not None:
         os.environ["WINDOWS_DEV_AGENT_PROJECT_DIR"] = str(project)
-
     common.DATA_DIR = data_dir
     common.LOG_FILE = data_dir / "agent.log"
     common.ENVIRONMENT_CACHE_FILE = data_dir / "environment.json"
-
-    from src.discovery import discovery
-
-    previous_discovery = (discovery.CACHE_DIR, discovery.CACHE_FILE)
-    discovery.CACHE_DIR = data_dir
-    discovery.CACHE_FILE = data_dir / "environment.json"
     try:
         yield
     finally:
-        discovery.CACHE_DIR, discovery.CACHE_FILE = previous_discovery
         common.DATA_DIR, common.LOG_FILE, common.ENVIRONMENT_CACHE_FILE = previous_common
         for key, value in previous_env.items():
             if value is None:
@@ -114,14 +105,7 @@ def _invalid_tool_result(request_id: Any, error: str) -> dict[str, Any]:
     return {
         "jsonrpc": "2.0",
         "id": request_id,
-        "result": {
-            "content": [
-                {
-                    "type": "text",
-                    "text": json.dumps({"status": "invalid_input", "error": error}, indent=2),
-                }
-            ]
-        },
+        "result": {"content": [{"type": "text", "text": json.dumps({"status": "invalid_input", "error": error}, indent=2)}]},
     }
 
 
@@ -148,9 +132,7 @@ def _codex_plugin_inventory() -> dict[str, Any]:
     }
 
 
-def _augment_ecosystem_response(
-    response: Optional[dict[str, Any]], project: Path
-) -> Optional[dict[str, Any]]:
+def _augment_ecosystem_response(response: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     if not response:
         return response
     try:
@@ -160,14 +142,8 @@ def _augment_ecosystem_response(
         inventory = payload["inventory"]
     except (KeyError, TypeError, StopIteration, json.JSONDecodeError):
         return response
-
-    inventory["codex_plugins"] = _codex_plugin_inventory()
-    agents_dir = project / ".agents"
-    if agents_dir.exists():
-        agent_configs = inventory.setdefault("agent_configs", [])
-        agents_path = str(agents_dir)
-        if agents_path not in agent_configs:
-            agent_configs.append(agents_path)
+    if inventory.get("host_inventory_included"):
+        inventory["codex_plugins"] = _codex_plugin_inventory()
     text_entry["text"] = json.dumps(payload, indent=2, default=str)
     return response
 
@@ -175,7 +151,6 @@ def _augment_ecosystem_response(
 async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
     method = request.get("method", "")
     request_id = request.get("id")
-
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}}
 
@@ -199,8 +174,8 @@ async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
     if method == "initialize" and response and isinstance(response.get("result"), dict):
         response["result"]["instructions"] = CODEX_INSTRUCTIONS
         response["result"]["serverInfo"] = {"name": "windows-dev-agent", "version": __version__}
-    if tool_name == "ecosystem_scan" and project is not None:
-        response = _augment_ecosystem_response(response, project)
+    if tool_name == "ecosystem_scan":
+        response = _augment_ecosystem_response(response)
     return response
 
 
@@ -223,11 +198,7 @@ def main_sync() -> int:
                 response = loop.run_until_complete(handle_request(request))
             except Exception as exc:
                 logger.exception("Codex adapter request failed")
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32700, "message": str(exc)},
-                }
+                response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(exc)}}
             if response is not None:
                 sys.stdout.write(json.dumps(response, default=str) + "\n")
                 sys.stdout.flush()

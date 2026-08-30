@@ -2,12 +2,9 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "windows-dev-agent",
   "displayName": "Windows Dev Agent",
-  "description": "Claude Code adapter for the shared Windows Dev Agent runtime: PowerShell-first discovery, host-enforced approval gates, capability routing, package setup, isolation, and ecosystem cleanup.",
-  "version": "0.3.0",
-  "author": {
-    "name": "The-Biomechanist",
-    "url": "https://github.com/The-Biomechanist"
-  },
+  "description": "Claude Code adapter for the shared Windows Dev Agent runtime: truth-preserving Windows discovery, host-owned approval, capability routing, package setup, isolation, and ecosystem cleanup.",
+  "version": "0.4.0",
+  "author": {"name": "The-Biomechanist", "url": "https://github.com/The-Biomechanist"},
   "homepage": "https://github.com/The-Biomechanist/Windows-Dev-Agent",
   "repository": "https://github.com/The-Biomechanist/Windows-Dev-Agent",
   "license": "MIT",

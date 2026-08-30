@@ -1,14 +1,8 @@
-"""Claude Code PreToolUse safety gate.
+"""Claude Code PreToolUse safety classifier for Windows Dev Agent.
 
-This hook only tightens Claude Code's native permission system:
-
-- forbidden effective actions are denied;
-- actions that Windows Dev Agent knows require explicit approval return ``ask``;
-- read-only or reversible actions make no plugin permission decision and remain
-  subject to Claude Code's ordinary permission flow.
-
-The hook never returns ``allow``. A model-provided ``user_approved`` flag never
-bypasses the host permission surface.
+This hook only tightens Claude Code's native permission system: forbidden
+effective actions are denied, known approval-required actions ask, and ordinary
+read/reversible actions defer to the host. It never returns ``allow``.
 """
 
 from __future__ import annotations
@@ -32,13 +26,11 @@ READ_ONLY_PATTERNS = [
     re.compile(r"^\s*(git\s+(status|log|diff|show)(\s|$)|Get-[\w-]+(\s|$)|Test-Path(\s|$)|Resolve-Path(\s|$)|where(\.exe)?\b)", re.I),
     re.compile(r"^\s*(python|py|node|npm|git|gh|dotnet|cargo|rustc|go|java|winget|choco|scoop)\s+--?version\b", re.I),
 ]
-
 REVERSIBLE_PATTERNS = [
     re.compile(r"^\s*(pytest|ruff\b|pylint\b|eslint\b|dprint\s+check\b)", re.I),
     re.compile(r"^\s*(cargo|go|dotnet)\s+test\b", re.I),
     re.compile(r"^\s*dotnet\s+build\b", re.I),
 ]
-
 APPROVAL_PATTERNS = [
     re.compile(r"\b(winget|choco|scoop)\s+(install|upgrade|uninstall)\b", re.I),
     re.compile(r"\b(pip|uv|npm|pnpm|yarn|cargo)\s+(install|add|remove|uninstall|update|upgrade)\b", re.I),
@@ -48,17 +40,11 @@ APPROVAL_PATTERNS = [
     re.compile(r"\b(Invoke-Expression|Start-Process)\b", re.I),
     re.compile(r"\b(rm|del|erase|rmdir)\b", re.I),
 ]
-
 FORBIDDEN_PATTERNS = [
     re.compile(r"\b(format\s+[a-z]:|diskpart\b|bcdedit\b|cipher\s+/w:)", re.I),
-    re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\\\Windows\\\\System32)", re.I),
+    re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\Windows\\System32)", re.I),
 ]
-
-# Dynamic constructs are not assumed read-only even when the first token is a
-# familiar inspection command. The gate is conservative, but normal host
-# permissions remain the authority for non-forbidden execution.
 DYNAMIC_SHELL = re.compile(r"(;|\r|\n|&&|\|\||\||>|<|\$\(|@\(|`|(?<!&)&(?!&))")
-
 MCP_PREFIXES = (
     "mcp__windows-dev-agent__",
     "mcp__plugin_windows-dev-agent_windows-dev-agent__",
@@ -66,7 +52,6 @@ MCP_PREFIXES = (
 
 
 def classify_shell(command: str) -> str:
-    """Classify one Bash or PowerShell command conservatively."""
     for pattern in FORBIDDEN_PATTERNS:
         if pattern.search(command):
             return "forbidden"
@@ -85,7 +70,6 @@ def classify_shell(command: str) -> str:
 
 
 def classify_bash(command: str) -> str:
-    """Backward-compatible wrapper used by tests and callers."""
     return classify_shell(command)
 
 
@@ -118,29 +102,26 @@ def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
     if short_name is None:
         return "approval-required"
 
-    if short_name in {
-        "env_inspect",
-        "tool_discover",
-        "workflow_plan",
-        "package_search",
-        "logs_query",
-        "mcp_audit",
-        "ecosystem_scan",
-    }:
+    # These are pure in-process/built-in reads. tool_discover and package_search
+    # intentionally stay approval-required because they execute PATH-resolved
+    # binaries/package managers even though their requested effect is diagnostic.
+    if short_name in {"env_inspect", "workflow_plan", "logs_query"}:
         return "read-only"
+    if short_name in {"tool_discover", "package_search"}:
+        return "approval-required"
+    if short_name == "ecosystem_scan":
+        return "approval-required" if bool(tool_input.get("include_host", False)) else "read-only"
+    if short_name == "mcp_audit":
+        broader = bool(tool_input.get("include_host", False)) or bool(str(tool_input.get("config_path", "")).strip())
+        return "approval-required" if broader else "read-only"
 
     execute = bool(tool_input.get("execute", False))
     if short_name in {"package_install", "sandbox_run"}:
         return "approval-required" if execute else "read-only"
-
     if short_name == "capability_run":
         if not execute:
             return "read-only"
-        return _capability_safety(
-            str(tool_input.get("capability", "")),
-            tool_input.get("extra_args"),
-        )
-
+        return _capability_safety(str(tool_input.get("capability", "")), tool_input.get("extra_args"))
     return "approval-required"
 
 
@@ -152,14 +133,11 @@ def _permission_decision(safety_class: str) -> tuple[Optional[str], str]:
     return None, f"Windows Dev Agent classified this action as {safety_class} and deferred to Claude Code's normal permission flow."
 
 
-def evaluate_hook_event(
-    event: dict[str, Any], *, log_file: Optional[Path] = None
-) -> Optional[dict[str, Any]]:
+def evaluate_hook_event(event: dict[str, Any], *, log_file: Optional[Path] = None) -> Optional[dict[str, Any]]:
     tool_name = str(event.get("tool_name", ""))
     tool_input = event.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
-
     safety_class = classify_tool_call(tool_name, tool_input)
     decision, reason = _permission_decision(safety_class)
     try:
@@ -168,6 +146,7 @@ def evaluate_hook_event(
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "PreToolUse",
                 "success": None,
+                "execution_outcome": "not_applicable",
                 "permission_denied": decision == "deny",
                 "session_id": event.get("session_id"),
                 "tool_name": tool_name,
@@ -179,10 +158,8 @@ def evaluate_hook_event(
         )
     except Exception:
         pass
-
     if decision is None:
         return None
-
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -197,24 +174,20 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=None)
     args = parser.parse_args()
-
     try:
         event = json.load(sys.stdin)
+        if not isinstance(event, dict):
+            raise ValueError("hook event must be a JSON object")
     except Exception as exc:
-        output = {
+        print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": f"Safety hook could not parse its input: {exc}",
             }
-        }
-        print(json.dumps(output))
+        }))
         return 0
-
-    output = evaluate_hook_event(
-        event,
-        log_file=resolve_log_file(args.data_dir),
-    )
+    output = evaluate_hook_event(event, log_file=resolve_log_file(args.data_dir))
     if output is not None:
         print(json.dumps(output))
     return 0

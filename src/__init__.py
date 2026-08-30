@@ -1,4 +1,4 @@
-"""Windows Dev Agent shared core."""
+"""Windows Dev Agent shared runtime."""
 
-__version__ = "0.3.0"
-__author__ = "Windows Dev Agent Contributors"
+__version__ = "0.4.0"
+__author__ = "The-Biomechanist"
