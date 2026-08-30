@@ -130,6 +130,7 @@ def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str
         "blocked",
         "unavailable",
         "invalid_input",
+        "stale_plan",
         "approval_required",
         "unknown_capability",
         "configuration_error",
