@@ -46,7 +46,7 @@ def evaluate_hook_event(event: dict[str, Any], *, log_file: Optional[Path] = Non
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "PreToolUse",
                 "success": None,
-                "execution_outcome": "not_executed",
+                "execution_outcome": "not_applicable",
                 "permission_denied": denied,
                 "session_id": event.get("session_id"),
                 "tool_name": tool_name,
