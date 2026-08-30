@@ -48,14 +48,16 @@ def test_marketplace_index_when_present_is_immutable_distribution_metadata():
     assert "ref" not in source and "path" not in source
 
 
-def test_codex_mcp_uses_isolated_launcher_without_cwd_import_dependency():
-    config = json.loads((ROOT / ".mcp.codex.json").read_text(encoding="utf-8"))
+def test_codex_mcp_uses_native_plugin_cwd_for_isolated_launcher():
+    raw = (ROOT / ".mcp.codex.json").read_text(encoding="utf-8")
+    config = json.loads(raw)
     assert list(config) == ["windows_dev_agent"]
     server = config["windows_dev_agent"]
     assert server["command"] == "powershell.exe"
-    assert "${PLUGIN_ROOT}/scripts/launch-python.ps1" in server["args"]
+    assert server["cwd"] == "."
+    assert "scripts/launch-python.ps1" in server["args"]
+    assert "${PLUGIN_ROOT}" not in raw
     assert server["args"][-2:] == ["-Module", "src.codex_server"]
-    assert "cwd" not in server
     assert server["tool_timeout_sec"] > 600
     assert server["default_tools_approval_mode"] == "prompt"
     for tool in ("env_inspect", "logs_query"):
