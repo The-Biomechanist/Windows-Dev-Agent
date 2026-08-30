@@ -1,9 +1,8 @@
 """Codex PreToolUse adapter for Windows Dev Agent safety classification.
 
 Codex does not support Claude Code's ``permissionDecision: ask`` semantics in
-PreToolUse. This adapter therefore performs only the part that can be made
-host-correct: deny actions the shared classifier marks forbidden, otherwise
-emit no decision and defer to Codex's native approval policy.
+PreToolUse. This adapter therefore denies only actions the shared classifier
+marks forbidden and otherwise defers to Codex's native approval policy.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.observability.trace import append_event, resolve_log_file
+from src.runtime_paths import resolve_codex_data_dir
 from src.safety.gate import classify_tool_call
 
 CODEX_MCP_PREFIX = "mcp__windows_dev_agent__"
@@ -42,6 +42,7 @@ def evaluate_hook_event(
 
     safety_class = classify_tool_call(_shared_tool_name(tool_name), tool_input)
     denied = safety_class == "forbidden"
+    target_log = log_file or resolve_log_file(str(resolve_codex_data_dir()))
     try:
         append_event(
             {
@@ -56,7 +57,7 @@ def evaluate_hook_event(
                 "permission_decision": "deny" if denied else "host-default",
                 "host": "codex",
             },
-            log_file,
+            target_log,
         )
     except Exception:
         pass
@@ -102,10 +103,8 @@ def main() -> int:
         )
         return 0
 
-    output = evaluate_hook_event(
-        event,
-        log_file=resolve_log_file(args.data_dir),
-    )
+    log_file = resolve_log_file(args.data_dir) if args.data_dir else None
+    output = evaluate_hook_event(event, log_file=log_file)
     if output is not None:
         print(json.dumps(output))
     return 0
