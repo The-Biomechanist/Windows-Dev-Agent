@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 import sys
-from typing import Any
+from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-LOG_FILE = ROOT / "agent.log"
+DEFAULT_DATA_DIR = ROOT / ".cache"
 SENSITIVE_KEY = re.compile(r"(password|passwd|secret|token|api[_-]?key|authorization|cookie|credential)", re.I)
 MAX_VALUE_CHARS = 4000
+
+
+def resolve_log_file(data_dir: Optional[str] = None) -> Path:
+    configured = data_dir or os.environ.get("WINDOWS_DEV_AGENT_DATA_DIR")
+    directory = Path(configured).expanduser() if configured else DEFAULT_DATA_DIR
+    return directory / "agent.log"
 
 
 def _redact(value: Any, key: str = "") -> Any:
@@ -43,17 +51,22 @@ def event_from_hook(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def append_event(event: dict[str, Any], log_file: Path = LOG_FILE) -> None:
-    with log_file.open("a", encoding="utf-8") as handle:
+def append_event(event: dict[str, Any], log_file: Optional[Path] = None) -> None:
+    target = log_file or resolve_log_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", default=None)
+    args = parser.parse_args()
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
             raise ValueError("hook payload must be a JSON object")
-        append_event(event_from_hook(payload))
+        append_event(event_from_hook(payload), resolve_log_file(args.data_dir))
     except Exception as exc:
         # Observability must never break the tool call it is observing.
         print(f"windows-dev-agent trace warning: {exc}", file=sys.stderr)
