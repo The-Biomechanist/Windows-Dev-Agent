@@ -10,15 +10,16 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 import sys
 from typing import Any
 
-try:
-    from .trace import append_event, resolve_log_file
-    from ..runtime_paths import resolve_codex_data_dir
-except ImportError:
-    from trace import append_event, resolve_log_file
-    from src.runtime_paths import resolve_codex_data_dir
+ROOT = Path(__file__).resolve().parent.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.observability.trace import append_event, resolve_log_file
+from src.runtime_paths import resolve_codex_data_dir
 
 
 def event_from_hook(payload: dict[str, Any]) -> dict[str, Any]:
