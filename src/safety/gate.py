@@ -14,12 +14,13 @@ not sufficient to skip the permission dialog.
 
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
 import sys
-from typing import Any
+from typing import Any, Optional
 
 # Hook scripts are invoked by absolute path from an installed plugin cache. Put
 # the plugin root on sys.path before importing sibling runtime modules.
@@ -28,7 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.capabilities import CapabilityConfigError, load_capabilities
-from src.observability.trace import append_event
+from src.observability.trace import append_event, resolve_log_file
 
 READ_ONLY_PATTERNS = [
     re.compile(r"^\s*(git\s+(status|log|diff|show)|Get-[\w-]+|Test-Path|Resolve-Path|where(\.exe)?\b)", re.I),
@@ -99,12 +100,8 @@ def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
         return "read-only"
 
     execute = bool(tool_input.get("execute", False))
-    if short_name == "package_install":
+    if short_name in {"package_install", "sandbox_run"}:
         return "approval-required" if execute else "read-only"
-    if short_name == "sandbox_run":
-        # Planning Windows Sandbox can materialize a temporary .wsb bundle, so
-        # it is reversible rather than strictly read-only even when not launched.
-        return "approval-required" if execute else "reversible"
 
     if short_name == "capability_run":
         if not execute:
@@ -122,7 +119,9 @@ def _decision(safety_class: str) -> tuple[str, str]:
     return "deny", "Windows Dev Agent blocked a forbidden action. Change the task boundary explicitly before retrying."
 
 
-def evaluate_hook_event(event: dict[str, Any]) -> dict[str, Any]:
+def evaluate_hook_event(
+    event: dict[str, Any], *, log_file: Optional[Path] = None
+) -> dict[str, Any]:
     tool_name = str(event.get("tool_name", ""))
     tool_input = event.get("tool_input") or {}
     if not isinstance(tool_input, dict):
@@ -141,7 +140,8 @@ def evaluate_hook_event(event: dict[str, Any]) -> dict[str, Any]:
                 "tool_use_id": event.get("tool_use_id"),
                 "safety_class": safety_class,
                 "permission_decision": decision,
-            }
+            },
+            log_file,
         )
     except Exception:
         # Audit logging is secondary to the permission decision itself.
@@ -158,6 +158,10 @@ def evaluate_hook_event(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", default=None)
+    args = parser.parse_args()
+
     try:
         event = json.load(sys.stdin)
     except Exception as exc:
@@ -171,7 +175,14 @@ def main() -> int:
         print(json.dumps(output))
         return 0
 
-    print(json.dumps(evaluate_hook_event(event)))
+    print(
+        json.dumps(
+            evaluate_hook_event(
+                event,
+                log_file=resolve_log_file(args.data_dir),
+            )
+        )
+    )
     return 0
 
 
