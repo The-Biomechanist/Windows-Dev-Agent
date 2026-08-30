@@ -37,6 +37,7 @@ DATA_DIR = Path(
     os.environ.get("WINDOWS_DEV_AGENT_DATA_DIR", str(DEFAULT_DATA_DIR))
 ).expanduser()
 LOG_FILE = DATA_DIR / "agent.log"
+ENVIRONMENT_CACHE_FILE = DATA_DIR / "environment.json"
 
 
 def _default_project_dir() -> Path:
@@ -102,8 +103,20 @@ TOOLS = [
         },
     },
     {
+        "name": "package_search",
+        "description": "Search one installed Windows package manager for candidate package identities before installation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Human package name or candidate package identity"},
+                "source": {"type": "string", "enum": ["winget", "chocolatey", "scoop"], "default": "winget"}
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "package_install",
-        "description": "Plan or perform one package installation through WinGet, Chocolatey, or Scoop. Execution always goes through the host approval gate.",
+        "description": "Plan or perform one package installation through WinGet, Chocolatey, or Scoop after exact identity has been resolved. Execution always goes through the host approval gate.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -117,14 +130,19 @@ TOOLS = [
     },
     {
         "name": "sandbox_run",
-        "description": "Plan or execute an isolated command using WSL, a dev container, or Windows Sandbox when available. Execution always goes through the host approval gate.",
+        "description": "Plan or execute a command through WSL, a project Dev Container, or Windows Sandbox. Auto-routing requires the isolation requirement that selects the boundary. Execution always goes through host approval.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
                 "environment": {"type": "string", "enum": ["auto", "wsl", "dev_container", "windows_sandbox"], "default": "auto"},
+                "isolation_requirement": {
+                    "type": "string",
+                    "enum": ["linux_compatibility", "project_reproducibility", "untrusted_windows"],
+                    "description": "Required when environment=auto; selects the isolation mechanism by task semantics rather than tool availability"
+                },
                 "workspace_folder": {"type": "string", "description": "Workspace for dev-container/host context; defaults to the Claude project directory"},
-                "execute": _bool_property("Actually launch the isolated command"),
+                "execute": _bool_property("Actually launch the routed command"),
                 "user_approved": _bool_property("Set only after the user accepts the host permission prompt"),
             },
             "required": ["command"],
@@ -143,7 +161,7 @@ TOOLS = [
     },
     {
         "name": "logs_query",
-        "description": "Query redacted structured session audit events from persistent plugin data.",
+        "description": "Query minimal persistent Windows Dev Agent audit metadata across recorded sessions.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -193,6 +211,14 @@ def _resolve_dir(value: Optional[str], *, default: Optional[Path] = None) -> tup
     if not path.is_dir():
         return None, f"Not a directory: {path}"
     return path, None
+
+
+def _invalidate_environment_cache() -> bool:
+    try:
+        ENVIRONMENT_CACHE_FILE.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
 
 
 async def handle_env_inspect(args: dict[str, Any]) -> dict[str, Any]:
@@ -336,6 +362,37 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
 _PACKAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]*$")
 
 
+def _package_query(value: Any) -> Optional[str]:
+    query = str(value or "").strip()
+    if not query or len(query) > 160 or any(ord(ch) < 32 for ch in query):
+        return None
+    return query
+
+
+async def handle_package_search(args: dict[str, Any]) -> dict[str, Any]:
+    query = _package_query(args.get("query"))
+    if query is None:
+        return {"status": "invalid_input", "error": "query must be 1-160 printable characters"}
+    source = str(args.get("source", "winget"))
+    commands = {
+        "winget": ["winget", "search", "--query", query, "--source", "winget", "--accept-source-agreements"],
+        "chocolatey": ["choco", "search", query, "--limit-output"],
+        "scoop": ["scoop", "search", query],
+    }
+    argv = commands.get(source)
+    if argv is None:
+        return {"status": "invalid_input", "error": f"Unsupported package source: {source}"}
+    if not shutil.which(argv[0]):
+        return {"status": "unavailable", "source": source, "error": f"{argv[0]} is not installed"}
+    result = _run(argv, timeout=90)
+    return {
+        "status": "completed" if result.get("succeeded") else "failed",
+        "query": query,
+        "source": source,
+        **result,
+    }
+
+
 async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
     package_id = str(args.get("package_id", ""))
     source = str(args.get("source", "winget"))
@@ -368,7 +425,13 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
         return {**plan, "status": "unavailable", "error": f"{argv[0]} is not installed"}
 
     result = _run(argv, timeout=600)
-    return {**plan, **result, "status": "completed" if result.get("succeeded") else "failed"}
+    cache_invalidated = _invalidate_environment_cache() if result.get("succeeded") else False
+    return {
+        **plan,
+        **result,
+        "status": "completed" if result.get("succeeded") else "failed",
+        "environment_cache_invalidated": cache_invalidated,
+    }
 
 
 def _windows_sandbox_executable() -> Optional[str]:
@@ -383,16 +446,33 @@ def _windows_sandbox_executable() -> Optional[str]:
     return None
 
 
-def _choose_sandbox(environment: str) -> Optional[str]:
+def _select_sandbox(
+    environment: str,
+    isolation_requirement: Optional[str],
+    workspace: Path,
+) -> tuple[Optional[str], Optional[str]]:
     if environment != "auto":
-        return environment
-    if shutil.which("wsl") or shutil.which("wsl.exe"):
-        return "wsl"
-    if shutil.which("devcontainer"):
-        return "dev_container"
-    if _windows_sandbox_executable():
-        return "windows_sandbox"
-    return None
+        return environment, None
+    if isolation_requirement is None:
+        return None, "isolation_requirement is required when environment=auto"
+
+    if isolation_requirement == "linux_compatibility":
+        if shutil.which("wsl") or shutil.which("wsl.exe"):
+            return "wsl", None
+        return None, "WSL is not available for linux_compatibility"
+
+    if isolation_requirement == "project_reproducibility":
+        has_config = (workspace / ".devcontainer").exists() or (workspace / ".devcontainer.json").exists()
+        if shutil.which("devcontainer") and has_config:
+            return "dev_container", None
+        return None, "A configured Dev Container and devcontainer CLI are required for project_reproducibility"
+
+    if isolation_requirement == "untrusted_windows":
+        if _windows_sandbox_executable():
+            return "windows_sandbox", None
+        return None, "Windows Sandbox is not available for untrusted_windows containment"
+
+    return None, f"Unsupported isolation requirement: {isolation_requirement}"
 
 
 def _prepare_windows_sandbox(command: str) -> tuple[Path, list[str]]:
@@ -437,13 +517,27 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
     if not command:
         return {"status": "invalid_input", "error": "command is required"}
 
-    environment = _choose_sandbox(str(args.get("environment", "auto")))
-    if not environment:
-        return {"status": "unavailable", "error": "No supported isolation environment is available"}
-
     workspace, cwd_error = _resolve_dir(args.get("workspace_folder"))
     if cwd_error:
         return {"status": "invalid_input", "error": cwd_error}
+    assert workspace is not None
+
+    requested_environment = str(args.get("environment", "auto"))
+    requirement_value = args.get("isolation_requirement")
+    isolation_requirement = str(requirement_value) if requirement_value is not None else None
+    environment, route_error = _select_sandbox(
+        requested_environment,
+        isolation_requirement,
+        workspace,
+    )
+    if route_error:
+        return {
+            "status": "invalid_input" if requested_environment == "auto" and isolation_requirement is None else "unavailable",
+            "environment": requested_environment,
+            "isolation_requirement": isolation_requirement,
+            "error": route_error,
+        }
+    assert environment is not None
 
     if environment == "wsl":
         executable = shutil.which("wsl") or shutil.which("wsl.exe")
@@ -469,6 +563,7 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
     plan = {
         "status": "planned",
         "environment": environment,
+        "isolation_requirement": isolation_requirement,
         "project_dir": str(workspace),
         "safety_class": "approval-required",
         "argv": argv,
@@ -655,7 +750,12 @@ async def handle_logs_query(args: dict[str, Any]) -> dict[str, Any]:
     elif filter_name == "approvals":
         events = [event for event in events if event.get("permission_decision") == "ask"]
     last_n = max(1, min(int(args.get("last_n", 20)), 200))
-    return {"events": events[-last_n:], "matched": len(events), "data_dir": str(DATA_DIR)}
+    return {
+        "events": events[-last_n:],
+        "matched": len(events),
+        "scope": "persistent_history",
+        "data_dir": str(DATA_DIR),
+    }
 
 
 async def handle_mcp_audit(args: dict[str, Any]) -> dict[str, Any]:
@@ -691,6 +791,7 @@ HANDLERS = {
     "tool_discover": handle_tool_discover,
     "capability_run": handle_capability_run,
     "workflow_plan": handle_workflow_plan,
+    "package_search": handle_package_search,
     "package_install": handle_package_install,
     "sandbox_run": handle_sandbox_run,
     "ecosystem_scan": handle_ecosystem_scan,
