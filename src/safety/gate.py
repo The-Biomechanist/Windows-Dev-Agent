@@ -14,6 +14,7 @@ not sufficient to skip the permission dialog.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
@@ -21,6 +22,7 @@ import sys
 from typing import Any
 
 from src.capabilities import CapabilityConfigError, load_capabilities
+from src.observability.trace import append_event
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -45,8 +47,8 @@ APPROVAL_PATTERNS = [
 ]
 
 FORBIDDEN_PATTERNS = [
-    re.compile(r"\b(format\s+[a-z]:|diskpart\b|bcdedit\b|cipher\s+/w:)\b", re.I),
-    re.compile(r"\bRemove-Item\b.*\b(HKLM:|C:\\\\Windows\\\\System32)\b", re.I),
+    re.compile(r"\b(format\s+[a-z]:|diskpart\b|bcdedit\b|cipher\s+/w:)", re.I),
+    re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\\\Windows\\\\System32)", re.I),
 ]
 
 
@@ -120,6 +122,23 @@ def evaluate_hook_event(event: dict[str, Any]) -> dict[str, Any]:
 
     safety_class = classify_tool_call(tool_name, tool_input)
     decision, reason = _decision(safety_class)
+    try:
+        append_event(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "PreToolUse",
+                "success": decision != "deny",
+                "session_id": event.get("session_id"),
+                "tool_name": tool_name,
+                "tool_use_id": event.get("tool_use_id"),
+                "safety_class": safety_class,
+                "permission_decision": decision,
+            }
+        )
+    except Exception:
+        # Audit logging is secondary to the permission decision itself.
+        pass
+
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -134,7 +153,6 @@ def main() -> int:
     try:
         event = json.load(sys.stdin)
     except Exception as exc:
-        # A broken safety hook must fail closed, not silently allow execution.
         output = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
