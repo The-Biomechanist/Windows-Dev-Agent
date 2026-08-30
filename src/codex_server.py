@@ -7,7 +7,8 @@ host bindings:
 - explicit project-directory requirements for project-scoped tools, because a
   bundled plugin MCP server starts in the plugin cache rather than the user's
   active project;
-- Codex-facing MCP instructions and tool schemas.
+- Codex-facing MCP instructions and tool schemas;
+- Codex plugin/config inventory added to the shared read-only ecosystem scan.
 
 Permission prompts remain Codex-owned through the plugin MCP approval policy.
 """
@@ -123,6 +124,53 @@ def _invalid_tool_result(request_id: Any, error: str) -> dict[str, Any]:
     }
 
 
+def _safe_names(path: Path) -> list[str]:
+    if not path.is_dir():
+        return []
+    try:
+        return sorted(item.name for item in path.iterdir() if item.is_dir())
+    except OSError:
+        return []
+
+
+def _codex_plugin_inventory() -> dict[str, Any]:
+    root = Path.home() / ".codex" / "plugins"
+    cache = root / "cache"
+    personal = [name for name in _safe_names(root) if name != "cache"]
+    return {
+        "root": str(root),
+        "personal": personal,
+        "cache_marketplaces": _safe_names(cache),
+        "config_file": str(Path.home() / ".codex" / "config.toml")
+        if (Path.home() / ".codex" / "config.toml").is_file()
+        else None,
+    }
+
+
+def _augment_ecosystem_response(
+    response: Optional[dict[str, Any]], project: Path
+) -> Optional[dict[str, Any]]:
+    if not response:
+        return response
+    try:
+        content = response["result"]["content"]
+        text_entry = next(item for item in content if item.get("type") == "text")
+        payload = json.loads(text_entry["text"])
+        inventory = payload["inventory"]
+    except (KeyError, TypeError, StopIteration, json.JSONDecodeError):
+        return response
+
+    inventory["codex_plugins"] = _codex_plugin_inventory()
+    agents_dir = project / ".agents"
+    if agents_dir.exists():
+        agent_configs = inventory.setdefault("agent_configs", [])
+        agents_path = str(agents_dir)
+        if agents_path not in agent_configs:
+            agent_configs.append(agents_path)
+    text_entry["text"] = json.dumps(payload, indent=2, default=str)
+    return response
+
+
 async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
     method = request.get("method", "")
     request_id = request.get("id")
@@ -162,7 +210,10 @@ async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
         return _invalid_tool_result(request_id, error or "project directory is required")
 
     with _project_binding(project):
-        return await common.handle_request(request)
+        response = await common.handle_request(request)
+    if tool_name == "ecosystem_scan":
+        response = _augment_ecosystem_response(response, project)
+    return response
 
 
 def main_sync() -> int:
