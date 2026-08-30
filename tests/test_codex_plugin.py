@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -12,7 +11,7 @@ import sys
 from src import codex_server
 from src.observability import codex_trace
 from src.runtime_paths import resolve_data_dir
-from src.safety import codex_gate
+from src.safety import codex_gate, codex_permission
 
 ROOT = Path(__file__).resolve().parent.parent
 CODEX_PREFIX = "mcp__windows_dev_agent__"
@@ -81,11 +80,11 @@ def test_all_shared_skills_have_codex_frontmatter_names():
         assert "\ndescription:" in f"\n{frontmatter}\n"
 
 
-def test_claude_commands_are_thin_adapters_to_shared_skills():
+def test_claude_commands_are_thin_namespaced_adapters_to_shared_skills():
     routes = {
-        "env.md": "env-inspect",
-        "plan.md": "workflow-plan",
-        "defrag.md": "ecosystem-defrag",
+        "env.md": "windows-dev-agent:env-inspect",
+        "plan.md": "windows-dev-agent:workflow-plan",
+        "defrag.md": "windows-dev-agent:ecosystem-defrag",
     }
     for filename, skill in routes.items():
         text = (ROOT / "commands" / filename).read_text(encoding="utf-8")
@@ -177,14 +176,38 @@ def test_codex_gate_denies_forbidden_but_never_emulates_ask(monkeypatch):
     assert forbidden["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def test_codex_permission_request_allows_plan_only_and_defers_execution(monkeypatch):
+    monkeypatch.setattr(codex_permission, "append_event", lambda *_args, **_kwargs: None)
+    tool_name = CODEX_PREFIX + "package_install"
+
+    planned = codex_permission.evaluate_permission_request(
+        {
+            "tool_name": tool_name,
+            "tool_input": {"package_id": "Python.Python.3.12", "execute": False},
+        }
+    )
+    assert planned["hookSpecificOutput"]["hookEventName"] == "PermissionRequest"
+    assert planned["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+
+    executing = codex_permission.evaluate_permission_request(
+        {
+            "tool_name": tool_name,
+            "tool_input": {"package_id": "Python.Python.3.12", "execute": True},
+        }
+    )
+    assert executing is None
+
+
 def test_codex_hook_config_uses_codex_contract_not_claude_ask():
     raw = (ROOT / "hooks" / "codex-hooks.json").read_text(encoding="utf-8")
     config = json.loads(raw)
     assert "permissionDecision: ask" not in raw
-    matcher = config["hooks"]["PreToolUse"][0]["matcher"]
-    assert "Bash" in matcher
-    assert "windows_dev_agent" in matcher
-    assert "PowerShell" not in matcher
+    pretool_matcher = config["hooks"]["PreToolUse"][0]["matcher"]
+    permission_matcher = config["hooks"]["PermissionRequest"][0]["matcher"]
+    assert "Bash" in pretool_matcher
+    assert "windows_dev_agent" in pretool_matcher
+    assert "PowerShell" not in pretool_matcher
+    assert "windows_dev_agent" in permission_matcher
     commands = [
         hook["command"]
         for entries in config["hooks"].values()
