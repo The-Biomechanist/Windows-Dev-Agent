@@ -30,6 +30,7 @@ from src.capabilities import (
     run_capability,
     select_available_tool,
 )
+from src.observability.trace import history_log_files
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -839,16 +840,19 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_log_events() -> list[dict[str, Any]]:
-    if not LOG_FILE.exists():
-        return []
-    events = []
-    for line in LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+    events: list[dict[str, Any]] = []
+    for source in history_log_files(LOG_FILE):
         try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
+            lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
             continue
-        if isinstance(value, dict):
-            events.append(value)
+        for line in lines:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                events.append(value)
     return events
 
 
