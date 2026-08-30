@@ -37,6 +37,24 @@ def resolve_executable(command: str) -> Optional[str]:
     return str(path) if path.is_file() else None
 
 
+def executable_identity_matches(expected: str, actual: str) -> bool:
+    """Return whether two values identify the same current absolute executable path."""
+    if not isinstance(expected, str) or not isinstance(actual, str):
+        return False
+    try:
+        expected_path = Path(expected).expanduser()
+        actual_path = Path(actual).expanduser()
+        if not expected_path.is_absolute() or not actual_path.is_absolute():
+            return False
+        expected_path = expected_path.resolve(strict=True)
+        actual_path = actual_path.resolve(strict=True)
+        if not expected_path.is_file() or not actual_path.is_file():
+            return False
+    except OSError:
+        return False
+    return os.path.normcase(str(expected_path)) == os.path.normcase(str(actual_path))
+
+
 def _windows_directory() -> Optional[Path]:
     """Ask Windows for its installation directory instead of trusting PATH."""
     if os.name != "nt":
