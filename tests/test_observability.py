@@ -64,18 +64,20 @@ def test_session_filter_never_launders_other_session_events(tmp_path: Path):
     assert summary["execution_unknown"] == 1
 
 
-def test_permission_denial_is_not_execution_failure():
+def test_permission_event_is_not_counted_as_execution_attempt():
     summary = audit_report.summarize(
         [{
             "event": "PreToolUse",
-            "execution_outcome": "not_executed",
+            "execution_outcome": "not_applicable",
             "permission_denied": True,
             "permission_decision": "deny",
             "tool_name": "PowerShell",
         }]
     )
     assert summary["execution_failed"] == 0
-    assert summary["not_executed"] == 1
+    assert summary["execution_unknown"] == 0
+    assert summary["not_executed"] == 0
+    assert summary["not_applicable"] == 1
     assert summary["permission_denials"] == 1
 
 
