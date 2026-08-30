@@ -27,7 +27,7 @@ def run(coro):
 def test_codex_manifest_points_to_shared_root_components_and_version():
     manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "windows-dev-agent"
-    assert manifest["version"] == __version__ == "0.4.1"
+    assert manifest["version"] == __version__ == "0.4.2"
     assert manifest["skills"] == "./skills/"
     assert manifest["mcpServers"] == "./.mcp.codex.json"
     assert manifest["hooks"] == "./hooks/codex-hooks.json"
@@ -160,7 +160,6 @@ def test_codex_permission_request_auto_allows_only_plan_first_calls(monkeypatch)
     assert planned["hookSpecificOutput"]["decision"]["behavior"] == "allow"
     assert codex_permission.evaluate_permission_request({"tool_name": package, "tool_input": {"package_id": "Python.Python.3.12", "execute": True}}) is None
 
-    # Filesystem inventory and external discovery stay on native Codex approval.
     for name, tool_input in (
         ("ecosystem_scan", {"cwd": "C:\\project", "include_host": False}),
         ("mcp_audit", {"cwd": "C:\\project", "include_host": False}),
