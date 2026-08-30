@@ -187,6 +187,8 @@ def run_capability(
     The Claude Code hook is the host permission authority. The server also
     requires an explicit acknowledgement for reversible and approval-required
     execution so direct MCP use cannot silently bypass the same boundary.
+    Child processes receive DEVNULL stdin so they cannot consume the MCP stdio
+    transport if they unexpectedly become interactive.
     """
     capabilities = load_capabilities(path)
     capability = capabilities.get(capability_id)
@@ -249,6 +251,7 @@ def run_capability(
         result = subprocess.run(
             argv,
             cwd=str(run_cwd) if run_cwd else None,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=max(1, min(int(timeout_seconds), 600)),
