@@ -12,7 +12,7 @@ From a checkout of this repository:
 claude --plugin-dir .
 ```
 
-The runtime uses only the Python standard library. No `pip install` step is required for the plugin or its MCP server. The plugin manifest declares version **0.2.0** and Claude Code **1.0.33+**.
+The runtime uses only the Python standard library. No `pip install` step is required for the plugin or its MCP server. The plugin manifest declares version **0.2.0** and uses Claude Code's current plugin manifest schema.
 
 If you publish or install it through a configured Claude Code marketplace or APM registry, the package name is `windows-dev-agent`.
 
@@ -119,7 +119,7 @@ Earlier unused graph/workflow/schema scaffolding and tracked cache material were
 - Windows 10 or Windows 11 for full native behavior;
 - PowerShell 5.1+;
 - Python 3.9+;
-- Claude Code 1.0.33+ for the plugin surface.
+- a current Claude Code release that supports plugin MCP servers and structured `PreToolUse` permission decisions.
 
 Some read-only/runtime tests are portable, but release verification runs on Windows.
 
