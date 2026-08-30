@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe",
+            "command": "${SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
             "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/scripts/launch-python.ps1", "-Module", "src.safety.claude_gate", "--data-dir", "${CLAUDE_PLUGIN_DATA}"],
             "description": "Tighten Claude Code's normal permission flow for external execution, mutations, forbidden actions, and broader read scopes"
           }
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe",
+            "command": "${SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
             "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/scripts/launch-python.ps1", "-Module", "src.observability.trace", "--data-dir", "${CLAUDE_PLUGIN_DATA}"],
             "description": "Append minimal derived metadata for completed Windows Dev Agent MCP calls"
           }
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe",
+            "command": "${SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
             "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/scripts/launch-python.ps1", "-Module", "src.observability.trace", "--data-dir", "${CLAUDE_PLUGIN_DATA}"],
             "description": "Append minimal derived metadata for failed Windows Dev Agent MCP calls"
           }
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe",
+            "command": "${SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
             "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/scripts/launch-python.ps1", "-Module", "src.observability.audit_report", "--data-dir", "${CLAUDE_PLUGIN_DATA}"],
             "description": "Print a session-bound Windows Dev Agent audit summary"
           }
