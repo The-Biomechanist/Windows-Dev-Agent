@@ -17,6 +17,7 @@ def test_manifest_uses_current_schema_surface():
     assert manifest["$schema"] == "https://json.schemastore.org/claude-code-plugin-manifest.json"
     assert manifest["name"] == "windows-dev-agent"
     assert manifest["displayName"] == "Windows Dev Agent"
+    assert manifest["version"] == "0.3.0"
     assert "minClaudeCodeVersion" not in manifest
 
 
@@ -24,7 +25,7 @@ def test_mcp_server_binds_plugin_data_and_project_roots():
     config = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
     server = config["mcpServers"]["windows-dev-agent"]
     assert server["command"] == "python"
-    assert server["args"] == ["-m", "src.mcp.server"]
+    assert server["args"] == ["-m", "src.claude_server"]
     assert server["cwd"] == "${CLAUDE_PLUGIN_ROOT}"
     assert server["env"]["WINDOWS_DEV_AGENT_DATA_DIR"] == "${CLAUDE_PLUGIN_DATA}"
     assert server["env"]["WINDOWS_DEV_AGENT_PROJECT_DIR"] == "${CLAUDE_PROJECT_DIR}"
