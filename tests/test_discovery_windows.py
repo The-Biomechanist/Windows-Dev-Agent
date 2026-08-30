@@ -26,7 +26,19 @@ def test_shipped_optional_feature_identities_match_windows_contract():
     assert 'Get-OptionalFeatureProbe "Microsoft-Hyper-V"' in text
     assert 'Get-OptionalFeatureProbe "Containers-DisposableClientVM"' in text
     assert 'Get-OptionalFeatureProbe "Containers-DisposableVM"' not in text
+    assert 'Get-OptionalFeatureProbe "Microsoft-Windows-Subsystem-Linux"' in text
     assert "Get-WindowsOptionalFeature -Online" in text
+
+
+def test_wsl_enabled_but_missing_executable_is_not_swallowed_as_plain_missing():
+    text = SCRIPT.read_text(encoding="utf-8")
+    inconsistent = 'elseif ($wslFeature.available -eq $true -and $wslExePresent -eq $false)'
+    generic_missing = 'elseif ($wslFeature.available -eq $false -or $wslExePresent -eq $false)'
+    assert inconsistent in text and generic_missing in text
+    assert text.index(inconsistent) < text.index(generic_missing)
+    block = text[text.index(inconsistent):text.index(generic_missing)]
+    assert 'Add-DiscoveryError "WSL feature is enabled but wsl.exe was not found"' in block
+    assert '$wslInstalled = $null' in block
 
 
 def test_native_discovery_script_emits_truth_preserving_json():
@@ -44,6 +56,7 @@ def test_native_discovery_script_emits_truth_preserving_json():
     assert isinstance(payload["errors"], list)
     assert payload["virtualization"]["hyper_v_available"] in {True, False, None}
     assert payload["virtualization"]["windows_sandbox_available"] in {True, False, None}
+    assert payload["virtualization"]["wsl_installed"] in {True, False, None}
     assert payload["virtualization"]["hyper_v_state"]
     assert payload["virtualization"]["windows_sandbox_state"]
     assert "username" not in payload["system"]
@@ -58,3 +71,4 @@ def test_native_environment_discovery_round_trips_its_own_output(tmp_path: Path)
     cached = json.loads((tmp_path / "environment.json").read_text(encoding="utf-8"))
     assert cached == snapshot.to_dict()
     assert cached["probe_states"]["windows_sandbox"] in {"available", "missing", "unknown"}
+    assert cached["probe_states"]["wsl"] in {"available", "missing", "unknown"}
