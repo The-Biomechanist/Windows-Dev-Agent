@@ -27,7 +27,7 @@ def run(coro):
 def test_codex_manifest_points_to_shared_root_components_and_version():
     manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "windows-dev-agent"
-    assert manifest["version"] == __version__ == "0.4.0"
+    assert manifest["version"] == __version__ == "0.4.1"
     assert manifest["skills"] == "./skills/"
     assert manifest["mcpServers"] == "./.mcp.codex.json"
     assert manifest["hooks"] == "./hooks/codex-hooks.json"

@@ -12,12 +12,12 @@ ROOT = Path(__file__).resolve().parent.parent
 INSTALLED_PREFIX = "mcp__plugin_windows-dev-agent_windows-dev-agent__"
 
 
-def test_manifest_and_runtime_version_match_0_4_release():
+def test_manifest_and_runtime_version_match_release():
     manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["$schema"] == "https://json.schemastore.org/claude-code-plugin-manifest.json"
     assert manifest["name"] == "windows-dev-agent"
     assert manifest["displayName"] == "Windows Dev Agent"
-    assert manifest["version"] == __version__ == "0.4.0"
+    assert manifest["version"] == __version__ == "0.4.1"
     assert "minClaudeCodeVersion" not in manifest
 
 
