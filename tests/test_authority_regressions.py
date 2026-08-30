@@ -6,8 +6,10 @@ from src.mcp import server
 
 
 def test_package_install_refuses_execution_when_cache_invalidation_fails(monkeypatch, tmp_path: Path):
+    trusted = r"C:\trusted\winget.exe"
     monkeypatch.setattr(server, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(server, "resolve_executable", lambda _name: r"C:\trusted\winget.exe")
+    monkeypatch.setattr(server, "resolve_executable", lambda _name: trusted)
+    monkeypatch.setattr(server, "executable_identity_matches", lambda expected, actual: expected == actual)
     monkeypatch.setattr(server, "invalidate_environment_cache", lambda _data_dir: False)
     monkeypatch.setattr(
         server,
@@ -17,7 +19,12 @@ def test_package_install_refuses_execution_when_cache_invalidation_fails(monkeyp
 
     result = __import__("asyncio").run(
         server.handle_package_install(
-            {"package_id": "Python.Python.3.12", "source": "winget", "execute": True}
+            {
+                "package_id": "Python.Python.3.12",
+                "source": "winget",
+                "execute": True,
+                "expected_executable": trusted,
+            }
         )
     )
 
