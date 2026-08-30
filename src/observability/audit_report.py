@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import argparse
 from collections import Counter
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-LOG_FILE = ROOT / "agent.log"
+from trace import resolve_log_file
 
 
-def load_events(log_file: Path = LOG_FILE) -> list[dict[str, Any]]:
-    if not log_file.exists():
+def load_events(log_file: Optional[Path] = None) -> list[dict[str, Any]]:
+    target = log_file or resolve_log_file()
+    if not target.exists():
         return []
     events: list[dict[str, Any]] = []
-    for line in log_file.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in target.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
@@ -40,7 +41,11 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def main() -> int:
-    events = load_events()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", default=None)
+    args = parser.parse_args()
+
+    events = load_events(resolve_log_file(args.data_dir))
     if not events:
         print("Windows Dev Agent audit: no session events recorded.")
         return 0
