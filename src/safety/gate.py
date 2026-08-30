@@ -167,7 +167,8 @@ def evaluate_hook_event(
             {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "PreToolUse",
-                "success": decision != "deny",
+                "success": None,
+                "permission_denied": decision == "deny",
                 "session_id": event.get("session_id"),
                 "tool_name": tool_name,
                 "tool_use_id": event.get("tool_use_id"),
