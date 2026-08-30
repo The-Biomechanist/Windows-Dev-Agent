@@ -17,32 +17,44 @@ def test_manifest_and_runtime_version_match_release():
     assert manifest["$schema"] == "https://json.schemastore.org/claude-code-plugin-manifest.json"
     assert manifest["name"] == "windows-dev-agent"
     assert manifest["displayName"] == "Windows Dev Agent"
-    assert manifest["version"] == __version__ == "0.4.3"
+    assert manifest["version"] == __version__ == "0.5.0"
     assert "minClaudeCodeVersion" not in manifest
 
 
-def test_mcp_server_binds_plugin_data_and_project_roots():
+def test_mcp_server_uses_plugin_root_launcher_without_cwd_import_dependency():
     config = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
     server = config["mcpServers"]["windows-dev-agent"]
-    assert server["command"] == "python"
-    assert server["args"] == ["-m", "src.claude_server"]
-    assert server["cwd"] == "${CLAUDE_PLUGIN_ROOT}"
+    assert server["command"] == "powershell.exe"
+    assert "${CLAUDE_PLUGIN_ROOT}/scripts/launch-python.ps1" in server["args"]
+    assert server["args"][-2:] == ["-Module", "src.claude_server"]
+    assert "cwd" not in server
     assert server["env"]["WINDOWS_DEV_AGENT_DATA_DIR"] == "${CLAUDE_PLUGIN_DATA}"
     assert server["env"]["WINDOWS_DEV_AGENT_PROJECT_DIR"] == "${CLAUDE_PROJECT_DIR}"
 
 
-def test_hook_scripts_are_rooted_and_use_persistent_plugin_data():
+def test_python_launcher_is_isolated_and_never_searches_path_for_python():
+    text = (ROOT / "scripts" / "launch-python.ps1").read_text(encoding="utf-8")
+    assert "$MinimumPython = [Version]'3.11'" in text
+    assert "WINDOWS_DEV_AGENT_PYTHON must be an absolute" in text
+    assert " -I -c " in text
+    assert "Get-Command python" not in text
+    assert "where.exe" not in text
+    assert "$env:PATH" not in text
+
+
+def test_hook_scripts_use_argv_form_and_persistent_plugin_data():
     config = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-    commands = [
-        hook["command"]
+    hooks = [
+        hook
         for entries in config["hooks"].values()
         for entry in entries
         for hook in entry.get("hooks", [])
         if hook.get("type") == "command"
     ]
-    assert commands
-    assert all("${CLAUDE_PLUGIN_ROOT}" in command for command in commands)
-    assert all("${CLAUDE_PLUGIN_DATA}" in command for command in commands)
+    assert hooks
+    assert all(hook["command"] == "powershell.exe" for hook in hooks)
+    assert all("${CLAUDE_PLUGIN_ROOT}/scripts/launch-python.ps1" in hook["args"] for hook in hooks)
+    assert all("${CLAUDE_PLUGIN_DATA}" in hook["args"] for hook in hooks)
 
 
 def test_pretool_hook_covers_shell_mutations_and_broader_mcp_reads():
@@ -64,7 +76,7 @@ def test_post_hooks_are_scoped_to_windows_dev_agent_mcp_only():
 
 
 def test_safety_hook_asks_for_exact_execute_call_without_fake_acknowledgement(tmp_path: Path):
-    gate = ROOT / "src" / "safety" / "gate.py"
+    gate = ROOT / "src" / "safety" / "claude_gate.py"
     data_dir = tmp_path / "plugin-data"
     project_dir = tmp_path / "project"
     project_dir.mkdir()
@@ -90,7 +102,7 @@ def test_safety_hook_asks_for_exact_execute_call_without_fake_acknowledgement(tm
 
 
 def test_read_only_hook_emits_no_permission_decision(tmp_path: Path):
-    gate = ROOT / "src" / "safety" / "gate.py"
+    gate = ROOT / "src" / "safety" / "claude_gate.py"
     data_dir = tmp_path / "plugin-data"
     event = {
         "hook_event_name": "PreToolUse",
