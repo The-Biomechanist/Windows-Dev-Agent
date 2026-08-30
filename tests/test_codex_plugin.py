@@ -47,17 +47,18 @@ def test_marketplace_index_when_present_is_immutable_distribution_metadata():
     assert "ref" not in source and "path" not in source
 
 
-def test_codex_mcp_uses_callable_namespace_and_external_execution_policy():
+def test_codex_mcp_uses_callable_namespace_and_host_bound_execution_policy():
     config = json.loads((ROOT / ".mcp.codex.json").read_text(encoding="utf-8"))
     assert list(config) == ["windows_dev_agent"]
     server = config["windows_dev_agent"]
     assert server["args"] == ["-m", "src.codex_server"]
     assert server["cwd"] == "."
+    assert server["tool_timeout_sec"] > 600
     assert server["default_tools_approval_mode"] == "prompt"
-    for tool in ("env_inspect", "workflow_plan", "logs_query"):
+    for tool in ("env_inspect", "logs_query"):
         assert server["tools"][tool]["approval_mode"] == "approve"
     for tool in (
-        "tool_discover", "package_search", "ecosystem_scan", "mcp_audit",
+        "tool_discover", "workflow_plan", "package_search", "ecosystem_scan", "mcp_audit",
         "capability_run", "package_install", "sandbox_run",
     ):
         assert server["tools"][tool]["approval_mode"] == "prompt"
@@ -145,7 +146,7 @@ def test_codex_ecosystem_augmentation_only_adds_host_inventory_when_requested(mo
     assert broad_payload["inventory"]["codex_plugins"]["personal"] == ["one"]
 
 
-def test_codex_gate_denies_forbidden_but_never_emulates_ask(monkeypatch):
+def test_codex_gate_denies_forbidden_and_otherwise_defers_to_native_policy(monkeypatch):
     monkeypatch.setattr(codex_gate, "append_event", lambda *_args, **_kwargs: None)
     assert codex_gate.evaluate_hook_event({"tool_name": "Bash", "tool_input": {"command": "git status --short"}}) is None
     assert codex_gate.evaluate_hook_event({"tool_name": CODEX_PREFIX + "package_install", "tool_input": {"package_id": "Python.Python.3.12", "execute": True}}) is None
@@ -153,32 +154,93 @@ def test_codex_gate_denies_forbidden_but_never_emulates_ask(monkeypatch):
     assert forbidden["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_codex_permission_request_auto_allows_only_plan_first_calls(monkeypatch):
+def test_codex_permission_request_auto_allows_only_scope_proven_plans(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(codex_permission, "append_event", lambda *_args, **_kwargs: None)
-    package = CODEX_PREFIX + "package_install"
-    planned = codex_permission.evaluate_permission_request({"tool_name": package, "tool_input": {"package_id": "Python.Python.3.12", "execute": False}})
-    assert planned["hookSpecificOutput"]["decision"]["behavior"] == "allow"
-    assert codex_permission.evaluate_permission_request({"tool_name": package, "tool_input": {"package_id": "Python.Python.3.12", "execute": True}}) is None
+    project = tmp_path / "project"
+    child = project / "child"
+    outside = tmp_path / "outside"
+    child.mkdir(parents=True)
+    outside.mkdir()
 
-    # Filesystem inventory and external discovery stay on native Codex approval.
+    package = CODEX_PREFIX + "package_install"
+    planned_package = codex_permission.evaluate_permission_request(
+        {
+            "cwd": str(project),
+            "tool_name": package,
+            "tool_input": {"package_id": "Python.Python.3.12", "execute": False},
+        }
+    )
+    assert planned_package["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+    assert codex_permission.evaluate_permission_request(
+        {
+            "cwd": str(project),
+            "tool_name": package,
+            "tool_input": {"package_id": "Python.Python.3.12", "execute": True},
+        }
+    ) is None
+
+    capability = CODEX_PREFIX + "capability_run"
+    planned_capability = codex_permission.evaluate_permission_request(
+        {
+            "cwd": str(project),
+            "tool_name": capability,
+            "tool_input": {"capability": "test-python", "cwd": str(child), "execute": False},
+        }
+    )
+    assert planned_capability["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+    assert codex_permission.evaluate_permission_request(
+        {
+            "cwd": str(project),
+            "tool_name": capability,
+            "tool_input": {"capability": "test-python", "cwd": str(outside), "execute": False},
+        }
+    ) is None
+
+    workflow = CODEX_PREFIX + "workflow_plan"
+    planned_workflow = codex_permission.evaluate_permission_request(
+        {
+            "cwd": str(project),
+            "tool_name": workflow,
+            "tool_input": {"task": "run tests", "cwd": str(project)},
+        }
+    )
+    assert planned_workflow["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+    assert codex_permission.evaluate_permission_request(
+        {
+            "cwd": str(project),
+            "tool_name": workflow,
+            "tool_input": {"task": "run tests", "cwd": str(outside)},
+        }
+    ) is None
+
+    sandbox = CODEX_PREFIX + "sandbox_run"
+    assert codex_permission.evaluate_permission_request(
+        {
+            "cwd": str(project),
+            "tool_name": sandbox,
+            "tool_input": {"command": "pwd", "workspace_folder": str(project), "execute": False},
+        }
+    ) is None
+
     for name, tool_input in (
-        ("ecosystem_scan", {"cwd": "C:\\project", "include_host": False}),
-        ("mcp_audit", {"cwd": "C:\\project", "include_host": False}),
+        ("ecosystem_scan", {"cwd": str(project), "include_host": False}),
+        ("mcp_audit", {"cwd": str(project), "include_host": False}),
         ("tool_discover", {"category": "runtimes"}),
         ("package_search", {"query": "Python"}),
     ):
-        assert codex_permission.evaluate_permission_request({"tool_name": CODEX_PREFIX + name, "tool_input": tool_input}) is None
+        assert codex_permission.evaluate_permission_request({"cwd": str(project), "tool_name": CODEX_PREFIX + name, "tool_input": tool_input}) is None
 
 
-def test_codex_hook_config_uses_native_contract_and_no_cross_process_plugin_data_assumption():
+def test_codex_hook_config_uses_native_contract_and_scope_bound_shortcuts():
     raw = (ROOT / "hooks" / "codex-hooks.json").read_text(encoding="utf-8")
     config = json.loads(raw)
     assert "permissionDecision: ask" not in raw
     assert "windows_dev_agent" in config["hooks"]["PreToolUse"][0]["matcher"]
     permission_matcher = config["hooks"]["PermissionRequest"][0]["matcher"]
     assert "capability_run" in permission_matcher
+    assert "workflow_plan" in permission_matcher
     assert "package_install" in permission_matcher
-    assert "sandbox_run" in permission_matcher
+    assert "sandbox_run" not in permission_matcher
     assert "ecosystem_scan" not in permission_matcher
     assert "mcp_audit" not in permission_matcher
     assert "tool_discover" not in permission_matcher
