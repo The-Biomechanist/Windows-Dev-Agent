@@ -1,4 +1,4 @@
-"""Emit a Codex-valid Stop-hook audit summary for the current session."""
+"""Emit a Codex-valid, session-bound Windows Dev Agent audit summary."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default=None)
     args = parser.parse_args()
-
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
@@ -37,7 +36,6 @@ def main() -> int:
     session_id = _session_id(payload)
     if not session_id:
         return 0
-
     log_file = (
         resolve_log_file(args.data_dir)
         if args.data_dir
@@ -46,13 +44,15 @@ def main() -> int:
     events = load_events(log_file, session_id=session_id)
     if not events:
         return 0
-
     summary = summarize(events)
     message = (
         "Windows Dev Agent session audit: "
         f"events={summary['total_events']}, "
-        f"execution_failures={summary['failures']}, "
-        f"permission_denials={summary.get('permission_denials', 0)}."
+        f"execution_succeeded={summary['execution_succeeded']}, "
+        f"execution_failed={summary['execution_failed']}, "
+        f"execution_unknown={summary['execution_unknown']}, "
+        f"not_executed={summary['not_executed']}, "
+        f"permission_denials={summary['permission_denials']}."
     )
     print(json.dumps({"systemMessage": message}))
     return 0
