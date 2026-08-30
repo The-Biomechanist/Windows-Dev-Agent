@@ -1,0 +1,46 @@
+{
+  "description": "Codex host hooks for Windows Dev Agent. Permission prompting remains Codex-owned; PreToolUse only blocks forbidden actions.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|mcp__windows_dev_agent__(capability_run|package_install|sandbox_run))$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/src/safety/codex_gate.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "commandWindows": "python \"${PLUGIN_ROOT}/src/safety/codex_gate.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "timeout": 30,
+            "description": "Deny forbidden Windows Dev Agent actions and otherwise defer to Codex permissions"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__windows_dev_agent__.*$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/src/observability/codex_trace.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "commandWindows": "python \"${PLUGIN_ROOT}/src/observability/codex_trace.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "timeout": 30,
+            "description": "Append minimal Codex Windows Dev Agent completion metadata"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/src/observability/codex_audit_report.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "commandWindows": "python \"${PLUGIN_ROOT}/src/observability/codex_audit_report.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "timeout": 30,
+            "description": "Emit a Codex-valid Windows Dev Agent session audit summary"
+          }
+        ]
+      }
+    ]
+  }
+}
