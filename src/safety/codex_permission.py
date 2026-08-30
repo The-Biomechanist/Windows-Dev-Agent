@@ -1,9 +1,10 @@
-"""Codex PermissionRequest adapter for bounded Windows Dev Agent calls.
+"""Codex PermissionRequest adapter for plan-only Windows Dev Agent calls.
 
-Codex owns prompting. This hook may auto-allow only requests whose concrete
-arguments remain plan-only or project-scoped read-only; executing mutations,
-host-wide inventory, and arbitrary extra config reads receive no plugin
-decision and continue to Codex's normal approval UI.
+Codex owns prompting. This hook may auto-allow only plan-first requests whose
+``execute`` flag is false. Project-scoped reads are not auto-approved because
+the plugin cannot independently prove that a caller-supplied directory is the
+active Codex project. Executing mutations and all filesystem inventory reads
+therefore continue to Codex's normal approval UI.
 """
 
 from __future__ import annotations
@@ -32,14 +33,6 @@ PLAN_FIRST_TOOLS = {
 }
 
 
-def _bounded_read(tool_name: str, tool_input: dict[str, Any]) -> bool:
-    if tool_name == PREFIX + "ecosystem_scan":
-        return not bool(tool_input.get("include_host", False))
-    if tool_name == PREFIX + "mcp_audit":
-        return not bool(tool_input.get("include_host", False)) and not bool(str(tool_input.get("config_path", "")).strip())
-    return False
-
-
 def evaluate_permission_request(event: dict[str, Any], *, log_file: Optional[Path] = None) -> Optional[dict[str, Any]]:
     tool_name = str(event.get("tool_name", ""))
     tool_input = event.get("tool_input") or {}
@@ -52,8 +45,6 @@ def evaluate_permission_request(event: dict[str, Any], *, log_file: Optional[Pat
         behavior = "deny"
         message = "Windows Dev Agent blocked a forbidden action."
     elif tool_name in PLAN_FIRST_TOOLS and not bool(tool_input.get("execute", False)):
-        behavior = "allow"
-    elif _bounded_read(tool_name, tool_input):
         behavior = "allow"
 
     target_log = log_file or resolve_log_file(str(resolve_codex_data_dir()))
