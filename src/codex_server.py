@@ -188,6 +188,8 @@ async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
 
 
 def main_sync() -> int:
+    with _runtime_binding():
+        common._cleanup_stale_sandbox_bundles()
     return run_stdio(handle_request, logger=logger)
 
 
