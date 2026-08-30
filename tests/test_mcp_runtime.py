@@ -26,7 +26,9 @@ def test_tools_list_exposes_exact_runtime_surface_and_strict_schemas():
     for tool in response["result"]["tools"]:
         assert tool["inputSchema"]["additionalProperties"] is False
     for name in ("capability_run", "package_install", "sandbox_run"):
-        assert "user_approved" not in _tool(name)["inputSchema"]["properties"]
+        properties = _tool(name)["inputSchema"]["properties"]
+        assert "user_approved" not in properties
+        assert "expected_executable" in properties
     assert "isolation_requirement" in _tool("sandbox_run")["inputSchema"]["required"]
     assert not hasattr(server, "main_sync")
 
@@ -100,6 +102,7 @@ def test_capability_run_uses_explicit_project_dir(tmp_path: Path, monkeypatch):
     )
     assert result["status"] == "planned"
     assert Path(observed["cwd"]) == tmp_path.resolve()
+    assert observed["expected_executable"] is None
     assert "user_approved" not in observed
 
 
@@ -128,8 +131,10 @@ def test_package_search_executes_the_exact_resolved_binary(monkeypatch):
 
 def test_package_install_invalidates_cache_generation_before_execution(tmp_path: Path, monkeypatch):
     observed = {}
+    trusted = "C:\\trusted\\winget.exe"
     monkeypatch.setattr(server, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(server, "resolve_executable", lambda _name: "C:\\trusted\\winget.exe")
+    monkeypatch.setattr(server, "resolve_executable", lambda _name: trusted)
+    monkeypatch.setattr(server, "executable_identity_matches", lambda expected, actual: expected == actual)
     monkeypatch.setattr(server, "invalidate_environment_cache", lambda data_dir: observed.setdefault("invalidated", data_dir) is not None)
 
     def fake_run(argv, **_kwargs):
@@ -139,7 +144,7 @@ def test_package_install_invalidates_cache_generation_before_execution(tmp_path:
     monkeypatch.setattr(server, "run_bounded", fake_run)
     result = run(
         server.handle_package_install(
-            {"package_id": "Python.Python.3.12", "source": "winget", "execute": True}
+            {"package_id": "Python.Python.3.12", "source": "winget", "execute": True, "expected_executable": trusted}
         )
     )
     assert result["status"] == "completed"
@@ -148,13 +153,38 @@ def test_package_install_invalidates_cache_generation_before_execution(tmp_path:
 
 
 def test_package_install_plan_never_executes_or_invalidates(monkeypatch):
-    monkeypatch.setattr(server, "resolve_executable", lambda _name: "C:\\trusted\\winget.exe")
+    trusted = "C:\\trusted\\winget.exe"
+    monkeypatch.setattr(server, "resolve_executable", lambda _name: trusted)
     monkeypatch.setattr(server, "invalidate_environment_cache", lambda _data_dir: (_ for _ in ()).throw(AssertionError("plan must not invalidate")))
     monkeypatch.setattr(server, "run_bounded", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plan must not execute")))
     result = run(server.handle_package_install({"package_id": "Python.Python.3.12", "source": "winget", "execute": False}))
     assert result["status"] == "planned"
     assert result["requires_host_approval"] is True
-    assert result["argv"][0] == "C:\\trusted\\winget.exe"
+    assert result["executable"] == trusted
+    assert result["argv"][0] == trusted
+
+
+def test_plan_first_execution_refuses_missing_or_changed_executable_identity(tmp_path: Path, monkeypatch):
+    trusted = "C:\\Windows\\System32\\wsl.exe"
+    monkeypatch.setattr(server, "_wsl_executable", lambda: trusted)
+    monkeypatch.setattr(server, "executable_identity_matches", lambda expected, actual: expected == actual)
+    monkeypatch.setattr(server, "run_bounded", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stale plan must not execute")))
+
+    base = {
+        "command": "pwd",
+        "workspace_folder": str(tmp_path),
+        "environment": "wsl",
+        "isolation_requirement": "linux_compatibility",
+        "payload_paths": [],
+        "execute": True,
+    }
+    missing = run(server.handle_sandbox_run(base))
+    assert missing["status"] == "invalid_input"
+    assert missing["execution_started"] is False
+
+    stale = run(server.handle_sandbox_run({**base, "expected_executable": "C:\\other\\wsl.exe"}))
+    assert stale["status"] == "stale_plan"
+    assert stale["execution_started"] is False
 
 
 def test_every_sandbox_request_requires_semantic_isolation_requirement(tmp_path: Path):
@@ -180,7 +210,8 @@ def test_explicit_sandbox_backend_must_satisfy_requirement(tmp_path: Path, monke
 
 
 def test_untrusted_windows_always_requires_reachable_payload(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: "C:\\Windows\\System32\\WindowsSandbox.exe")
+    trusted = "C:\\Windows\\System32\\WindowsSandbox.exe"
+    monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: trusted)
     missing = run(
         server.handle_sandbox_run(
             {
@@ -211,6 +242,7 @@ def test_untrusted_windows_always_requires_reachable_payload(tmp_path: Path, mon
     )
     assert planned["status"] == "planned"
     assert planned["environment"] == "windows_sandbox"
+    assert planned["executable"] == trusted
 
 
 def test_payload_rejects_workspace_escape_and_overlapping_roots(tmp_path: Path):
@@ -239,11 +271,11 @@ def test_windows_sandbox_config_is_outside_share_and_disables_exposure(tmp_path:
     payload = workspace / "artifact.bin"
     payload.write_bytes(b"payload")
     data_dir = tmp_path / "data"
+    trusted = "C:\\Windows\\System32\\WindowsSandbox.exe"
     monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: "C:\\Windows\\System32\\WindowsSandbox.exe")
     sources, error = server._payload_sources(workspace, ["artifact.bin"])
     assert error is None
-    bundle_root, config, argv = server._prepare_windows_sandbox("type artifact.bin", sources)
+    bundle_root, config, argv = server._prepare_windows_sandbox("type artifact.bin", sources, trusted)
     try:
         share = bundle_root / "share"
         staged = share / "payload" / "artifact.bin"
@@ -264,7 +296,7 @@ def test_windows_sandbox_config_is_outside_share_and_disables_exposure(tmp_path:
         ):
             assert setting in wsb
         assert "C:\\WDAShare\\payload" in (share / "run.cmd").read_text(encoding="utf-8")
-        assert argv[0] == "C:\\Windows\\System32\\WindowsSandbox.exe"
+        assert argv[0] == trusted
     finally:
         shutil.rmtree(bundle_root, ignore_errors=True)
 
@@ -276,8 +308,8 @@ def test_failed_sandbox_staging_removes_partial_bundle(tmp_path: Path, monkeypat
     payload.write_bytes(b"payload")
     data_dir = tmp_path / "data"
     staging = data_dir / "sandbox-runs" / "run-fixed"
+    trusted = "C:\\Windows\\System32\\WindowsSandbox.exe"
     monkeypatch.setattr(server, "DATA_DIR", data_dir)
-    monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: "C:\\Windows\\System32\\WindowsSandbox.exe")
 
     def fake_mkdtemp(**_kwargs):
         staging.mkdir(parents=True)
@@ -288,7 +320,7 @@ def test_failed_sandbox_staging_removes_partial_bundle(tmp_path: Path, monkeypat
     sources, error = server._payload_sources(workspace, ["artifact.bin"])
     assert error is None
     try:
-        server._prepare_windows_sandbox("type artifact.bin", sources)
+        server._prepare_windows_sandbox("type artifact.bin", sources, trusted)
     except OSError:
         pass
     else:
@@ -311,6 +343,7 @@ def test_wsl_route_uses_windows_owned_identity_and_project_cd(tmp_path: Path, mo
             }
         )
     )
+    assert result["executable"] == trusted_wsl
     assert result["argv"][:4] == [trusted_wsl, "--cd", str(tmp_path.resolve()), "--"]
     assert result["argv"][4:6] == ["sh", "-lc"]
 
@@ -318,6 +351,7 @@ def test_wsl_route_uses_windows_owned_identity_and_project_cd(tmp_path: Path, mo
 def test_captured_sandbox_spawn_failure_is_not_reported_as_started(tmp_path: Path, monkeypatch):
     trusted_wsl = "C:\\Windows\\System32\\wsl.exe"
     monkeypatch.setattr(server, "_wsl_executable", lambda: trusted_wsl)
+    monkeypatch.setattr(server, "executable_identity_matches", lambda expected, actual: expected == actual)
     monkeypatch.setattr(
         server,
         "run_bounded",
@@ -332,6 +366,7 @@ def test_captured_sandbox_spawn_failure_is_not_reported_as_started(tmp_path: Pat
                 "isolation_requirement": "linux_compatibility",
                 "payload_paths": [],
                 "execute": True,
+                "expected_executable": trusted_wsl,
             }
         )
     )
