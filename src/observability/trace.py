@@ -27,6 +27,17 @@ def resolve_log_file(data_dir: Optional[str] = None) -> Path:
     return directory / "agent.log"
 
 
+def history_log_files(log_file: Path) -> list[Path]:
+    """Return retained audit files in chronological order.
+
+    Rotation retains exactly one predecessor. Consumers must read that file
+    before the current log or a mid-session rotation would make earlier retained
+    events disappear from session/history views.
+    """
+    backup = log_file.with_name(log_file.name + ".1")
+    return [path for path in (backup, log_file) if path.exists()]
+
+
 def _decode_result_payload(response: Any) -> Optional[dict[str, Any]]:
     if isinstance(response, dict):
         if isinstance(response.get("status"), str):
