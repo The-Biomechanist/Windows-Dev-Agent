@@ -7,8 +7,9 @@
     {
       "name": "windows-dev-agent",
       "source": {
-        "source": "local",
-        "path": "./"
+        "source": "url",
+        "url": "https://github.com/The-Biomechanist/Windows-Dev-Agent.git",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",
