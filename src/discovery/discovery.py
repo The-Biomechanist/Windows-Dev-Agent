@@ -49,8 +49,10 @@ class EnvironmentDiscovery:
         ).expanduser()
         self.cache_dir = Path(configured).expanduser()
         self.cache_file = self.cache_dir / "environment.json"
+        self.last_execution_started = False
 
     def discover(self, force_refresh: bool = False) -> EnvironmentSnapshot:
+        self.last_execution_started = False
         if self.cache_enabled and not force_refresh:
             cached = self._load_cache()
             if cached is not None:
@@ -92,11 +94,13 @@ class EnvironmentDiscovery:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
+            self.last_execution_started = True
             raise DiscoveryError("Discovery script timed out") from exc
         except FileNotFoundError:
             return self._fallback_discovery("System Windows PowerShell disappeared before discovery")
         except OSError as exc:
             raise DiscoveryError(f"Failed to execute discovery: {exc}") from exc
+        self.last_execution_started = True
 
         try:
             data = json.loads(result.stdout)

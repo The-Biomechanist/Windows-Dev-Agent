@@ -55,6 +55,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         if event.get("execution_outcome") == "failed"
         or ("execution_outcome" not in event and event.get("success") is False)
     ]
+    external_process_started = sum(event.get("execution_started") is True for event in events)
     return {
         "total_events": len(events),
         "event_types": dict(event_types),
@@ -64,6 +65,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         "execution_unknown": outcomes.get("unknown", 0),
         "not_executed": outcomes.get("not_executed", 0),
         "not_applicable": outcomes.get("not_applicable", 0),
+        "external_process_started": external_process_started,
         "permission_denials": len(denied),
         "last_failure_tool": failed_tools[-1].get("tool_name") if failed_tools else None,
         "last_denied_tool": denied[-1].get("tool_name") if denied else None,
@@ -113,6 +115,7 @@ def main() -> int:
         f"failed: {summary['execution_failed']} | "
         f"unknown: {summary['execution_unknown']} | "
         f"not executed: {summary['not_executed']} | "
+        f"external processes started: {summary['external_process_started']} | "
         f"Permission denials: {summary['permission_denials']}"
     )
     if summary["tools"]:

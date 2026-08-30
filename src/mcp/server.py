@@ -263,20 +263,24 @@ def _invalidate_environment_cache() -> bool:
 
 
 async def handle_env_inspect(args: dict[str, Any]) -> dict[str, Any]:
+    discovery = None
     try:
         from src.discovery.discovery import EnvironmentDiscovery
 
-        snapshot = EnvironmentDiscovery(cache_enabled=True, data_dir=DATA_DIR).discover(
+        discovery = EnvironmentDiscovery(cache_enabled=True, data_dir=DATA_DIR)
+        snapshot = discovery.discover(
             force_refresh=bool(args.get("force_refresh", False))
         )
         return {
             "status": "ok" if snapshot.success else "degraded",
             "snapshot": snapshot.to_dict(),
+            "execution_started": discovery.last_execution_started,
         }
     except Exception as exc:
         return {
             "status": "degraded",
             "error": str(exc),
+            "execution_started": getattr(discovery, "last_execution_started", None),
             "system": {"os_name": platform.system(), "os_version": platform.version()},
             "runtimes": {
                 "python": {"available": True, "version": sys.version.split()[0]},
@@ -297,6 +301,7 @@ async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
     category = str(args.get("category", "all"))
     scan = candidates if category == "all" else {category: candidates.get(category, [])}
     output: dict[str, Any] = {}
+    execution_started = False
     for group, commands in scan.items():
         output[group] = {}
         for command in commands:
@@ -305,6 +310,7 @@ async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
                 output[group][command] = {"available": False, "version": None}
                 continue
             probe = _run([command, "--version"], timeout=5)
+            execution_started = execution_started or probe.get("execution_started") is True
             lines = (probe.get("stdout") or probe.get("stderr") or "").strip().splitlines()
             output[group][command] = {
                 "available": True,
@@ -312,6 +318,7 @@ async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
                 "version": lines[0] if probe.get("succeeded") and lines else None,
                 "version_status": "known" if probe.get("succeeded") and lines else "unknown",
             }
+    output["execution_started"] = execution_started
     return output
 
 
@@ -920,6 +927,7 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
     if include_packages and not include_host:
         return {"status": "invalid_input", "error": "include_packages requires include_host=true"}
 
+    execution_started = False
     inventory: dict[str, Any] = {
         "project_root": str(project_dir),
         "host_inventory_included": include_host,
@@ -956,6 +964,7 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
         code = shutil.which("code")
         if code:
             result = _run([code, "--list-extensions"], timeout=20)
+            execution_started = execution_started or result.get("execution_started") is True
             if result.get("succeeded"):
                 inventory["vscode"]["installed"] = [line for line in result.get("stdout", "").splitlines() if line]
             else:
@@ -971,6 +980,7 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
             winget = shutil.which("winget")
             if winget:
                 result = _run([winget, "list", "--source", "winget", "--disable-interactivity"], timeout=90)
+                execution_started = execution_started or result.get("execution_started") is True
                 if result.get("succeeded"):
                     inventory["packages"]["items"] = result.get("stdout", "").splitlines()[:300]
                 else:
@@ -983,7 +993,7 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
         item for item in inventory["vscode"]["installed"]
         if any(marker in item.lower() for marker in overlap_markers)
     ]
-    return {"status": "ok", "inventory": inventory}
+    return {"status": "ok", "inventory": inventory, "execution_started": execution_started}
 
 
 def _load_log_events() -> list[dict[str, Any]]:

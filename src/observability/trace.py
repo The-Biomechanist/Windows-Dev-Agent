@@ -85,6 +85,18 @@ def _may_execute_external_process(payload: dict[str, Any], tool_input: dict[str,
     return False
 
 
+def derive_execution_started(payload: dict[str, Any]) -> Optional[bool]:
+    # Runtime-established process-start evidence is distinct from effect outcome.
+    raw_tool_input = payload.get("tool_input") or {}
+    tool_input = raw_tool_input if isinstance(raw_tool_input, dict) else {}
+    result = _decode_result_payload(payload.get("tool_response"))
+    if isinstance(result, dict) and isinstance(result.get("execution_started"), bool):
+        return bool(result["execution_started"])
+    if "execute" in tool_input and not bool(tool_input.get("execute", False)):
+        return False
+    return None
+
+
 def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str]]:
     """Derive only what the returned tool evidence establishes.
 
@@ -170,6 +182,7 @@ def event_from_hook(payload: dict[str, Any]) -> dict[str, Any]:
         "ts": datetime.now(timezone.utc).isoformat(),
         "event": hook_event,
         "success": lifecycle_success,
+        "execution_started": derive_execution_started(payload),
         "execution_outcome": execution_outcome,
         "result_status": result_status,
         "session_id": payload.get("session_id"),
