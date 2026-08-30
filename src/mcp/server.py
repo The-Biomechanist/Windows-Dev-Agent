@@ -38,6 +38,10 @@ DATA_DIR = Path(os.environ.get("WINDOWS_DEV_AGENT_DATA_DIR", str(DEFAULT_DATA_DI
 LOG_FILE = DATA_DIR / "agent.log"
 ENVIRONMENT_CACHE_FILE = DATA_DIR / "environment.json"
 
+MAX_SANDBOX_PAYLOAD_ENTRIES = 10_000
+MAX_SANDBOX_PAYLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB staged input budget
+MAX_JSON_CONFIG_BYTES = 2 * 1024 * 1024
+
 
 def _default_project_dir() -> Path:
     configured = os.environ.get("WINDOWS_DEV_AGENT_PROJECT_DIR")
@@ -471,12 +475,26 @@ def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[P
         value = []
     if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
         return None, "payload_paths must be a list of non-empty workspace-relative paths"
+
     workspace = workspace.resolve()
     sources: list[tuple[Path, Path]] = []
+    selected_parts: list[tuple[str, ...]] = []
+    total_entries = 0
+    total_bytes = 0
+
     for raw in value:
         rel = Path(raw)
         if rel.is_absolute() or ".." in rel.parts:
             return None, f"payload path must stay inside the workspace: {raw}"
+        rel_parts = tuple(part.casefold() for part in rel.parts)
+        if any(
+            rel_parts == existing
+            or rel_parts[: len(existing)] == existing
+            or existing[: len(rel_parts)] == rel_parts
+            for existing in selected_parts
+        ):
+            return None, f"payload paths overlap or duplicate one another: {raw}"
+
         source = (workspace / rel).resolve()
         try:
             source.relative_to(workspace)
@@ -484,11 +502,14 @@ def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[P
             return None, f"payload path escapes the workspace: {raw}"
         if not source.exists():
             return None, f"payload path does not exist: {raw}"
+
         candidates = [source]
         if source.is_dir():
             candidates.extend(source.rglob("*"))
-        if len(candidates) > 10000:
-            return None, f"payload tree is too large to stage safely: {raw}"
+        total_entries += len(candidates)
+        if total_entries > MAX_SANDBOX_PAYLOAD_ENTRIES:
+            return None, "payload selection exceeds the Sandbox staging entry budget"
+
         for candidate in candidates:
             if candidate.is_symlink():
                 return None, f"payload contains a symbolic link: {candidate}"
@@ -496,6 +517,15 @@ def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[P
                 candidate.resolve().relative_to(workspace)
             except ValueError:
                 return None, f"payload contains a path that escapes the workspace: {candidate}"
+            if candidate.is_file():
+                try:
+                    total_bytes += candidate.stat().st_size
+                except OSError as exc:
+                    return None, f"payload size could not be established for {candidate}: {exc}"
+                if total_bytes > MAX_SANDBOX_PAYLOAD_BYTES:
+                    return None, "payload selection exceeds the Sandbox staging byte budget"
+
+        selected_parts.append(rel_parts)
         sources.append((source, rel))
     return sources, None
 
@@ -505,40 +535,44 @@ def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]]) ->
     if not sandbox_exe:
         raise RuntimeError("Windows Sandbox is not available")
     temp_dir = Path(tempfile.mkdtemp(prefix="windows-dev-agent-sandbox-"))
-    payload_dir = temp_dir / "payload"
-    payload_dir.mkdir()
-    for source, rel in payloads:
-        destination = payload_dir / rel
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if source.is_dir():
-            shutil.copytree(source, destination)
-        else:
-            shutil.copy2(source, destination)
-    script_path = temp_dir / "run.cmd"
-    script_path.write_text(
-        "@echo off\r\n"
-        "cd /d C:\\WDAShare\\payload\r\n"
-        f"{command}\r\n"
-        "set WDA_EXIT=%ERRORLEVEL%\r\n"
-        "echo.\r\n"
-        "echo Windows Dev Agent command exit code: %WDA_EXIT%\r\n"
-        "pause\r\n",
-        encoding="utf-8",
-    )
-    config_path = temp_dir / "run.wsb"
-    config_path.write_text(
-        "<Configuration>\n"
-        "  <Networking>Disable</Networking>\n"
-        "  <ClipboardRedirection>Disable</ClipboardRedirection>\n"
-        "  <MappedFolders><MappedFolder>\n"
-        f"    <HostFolder>{xml_escape(str(temp_dir))}</HostFolder>\n"
-        "    <SandboxFolder>C:\\WDAShare</SandboxFolder><ReadOnly>true</ReadOnly>\n"
-        "  </MappedFolder></MappedFolders>\n"
-        "  <LogonCommand><Command>cmd /d /s /c C:\\WDAShare\\run.cmd</Command></LogonCommand>\n"
-        "</Configuration>\n",
-        encoding="utf-8",
-    )
-    return config_path, [sandbox_exe, str(config_path)]
+    try:
+        payload_dir = temp_dir / "payload"
+        payload_dir.mkdir()
+        for source, rel in payloads:
+            destination = payload_dir / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, destination)
+            else:
+                shutil.copy2(source, destination)
+        script_path = temp_dir / "run.cmd"
+        script_path.write_text(
+            "@echo off\r\n"
+            "cd /d C:\\WDAShare\\payload\r\n"
+            f"{command}\r\n"
+            "set WDA_EXIT=%ERRORLEVEL%\r\n"
+            "echo.\r\n"
+            "echo Windows Dev Agent command exit code: %WDA_EXIT%\r\n"
+            "pause\r\n",
+            encoding="utf-8",
+        )
+        config_path = temp_dir / "run.wsb"
+        config_path.write_text(
+            "<Configuration>\n"
+            "  <Networking>Disable</Networking>\n"
+            "  <ClipboardRedirection>Disable</ClipboardRedirection>\n"
+            "  <MappedFolders><MappedFolder>\n"
+            f"    <HostFolder>{xml_escape(str(temp_dir))}</HostFolder>\n"
+            "    <SandboxFolder>C:\\WDAShare</SandboxFolder><ReadOnly>true</ReadOnly>\n"
+            "  </MappedFolder></MappedFolders>\n"
+            "  <LogonCommand><Command>cmd /d /s /c C:\\WDAShare\\run.cmd</Command></LogonCommand>\n"
+            "</Configuration>\n",
+            encoding="utf-8",
+        )
+        return config_path, [sandbox_exe, str(config_path)]
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
 
 
 async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
@@ -567,7 +601,10 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
         return {"status": "invalid_input", "error": payload_error}
     assert payloads is not None
     if requested_environment == "auto" and isolation_requirement == "untrusted_windows" and not payloads:
-        return {"status": "invalid_input", "error": "payload_paths is required for auto untrusted_windows routing so the isolated workload exists inside Windows Sandbox"}
+        return {
+            "status": "invalid_input",
+            "error": "payload_paths is required for auto untrusted_windows routing so the isolated workload exists inside Windows Sandbox",
+        }
 
     if environment == "wsl":
         executable = shutil.which("wsl") or shutil.which("wsl.exe")
@@ -607,20 +644,27 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
         return plan
 
     if environment == "windows_sandbox":
-        config_path: Optional[Path] = None
         try:
             config_path, launch_argv = _prepare_windows_sandbox(command, payloads)
+        except (OSError, RuntimeError) as exc:
+            return {**plan, "status": "failed", "error": str(exc), "execution_started": False}
+        try:
             process = subprocess.Popen(
                 launch_argv,
                 cwd=str(workspace),
                 stdin=subprocess.DEVNULL,
                 shell=False,
             )
-        except (OSError, RuntimeError) as exc:
-            result = {**plan, "status": "failed", "error": str(exc), "execution_started": config_path is not None}
-            if config_path is not None:
-                result["cleanup_path"] = str(config_path.parent)
-            return result
+        except OSError as exc:
+            cleanup_path = config_path.parent
+            shutil.rmtree(cleanup_path, ignore_errors=True)
+            return {
+                **plan,
+                "status": "failed",
+                "error": str(exc),
+                "execution_started": False,
+                "cleanup_performed": True,
+            }
         return {
             **plan,
             "status": "launched",
@@ -642,6 +686,12 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _safe_json(path: Path) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return None, str(exc)
+    if size > MAX_JSON_CONFIG_BYTES:
+        return None, f"JSON config exceeds {MAX_JSON_CONFIG_BYTES} byte read limit"
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -679,12 +729,15 @@ def _summarize_mcp_file(path: Path) -> dict[str, Any]:
         if not isinstance(spec, dict):
             summary.append({"name": str(name), "valid": False})
             continue
+        has_command = bool(spec.get("command"))
+        has_url = bool(spec.get("url"))
         summary.append(
             {
                 "name": str(name),
-                "valid": bool(spec.get("command") or spec.get("url")),
-                "transport": "command" if spec.get("command") else "url" if spec.get("url") else "unknown",
-                "command": spec.get("command"),
+                "valid": has_command or has_url,
+                "transport": "command" if has_command else "url" if has_url else "unknown",
+                "has_command": has_command,
+                "has_url": has_url,
                 "arg_count": len(spec.get("args", [])) if isinstance(spec.get("args", []), list) else None,
                 "has_env": bool(spec.get("env")),
             }
