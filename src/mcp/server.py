@@ -550,7 +550,7 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
     if not _PACKAGE_ID.fullmatch(package_id):
         return {"status": "invalid_input", "error": "package_id contains unsupported characters"}
     commands = {
-        "winget": ["winget", "install", "--id", package_id, "--exact", "--accept-package-agreements", "--accept-source-agreements"],
+        "winget": ["winget", "install", "--id", package_id, "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"],
         "chocolatey": ["choco", "install", package_id, "-y"],
         "scoop": ["scoop", "install", package_id],
     }
