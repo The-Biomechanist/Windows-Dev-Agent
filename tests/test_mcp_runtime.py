@@ -40,8 +40,32 @@ def test_subprocesses_cannot_consume_mcp_stdin(monkeypatch):
         return Result()
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
-    assert server._run(["probe"])["succeeded"] is True
+    result = server._run(["probe"])
+    assert result["succeeded"] is True
+    assert result["execution_started"] is True
     assert observed["stdin"] is server.subprocess.DEVNULL
+
+
+def test_subprocess_spawn_failure_is_not_reported_as_started(monkeypatch):
+    def fail_before_start(*_args, **_kwargs):
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(server.subprocess, "run", fail_before_start)
+    result = server._run(["probe"])
+    assert result["succeeded"] is False
+    assert result["execution_started"] is False
+    assert "timed_out" not in result
+
+
+def test_subprocess_timeout_preserves_that_execution_started(monkeypatch):
+    def timeout_after_start(argv, **_kwargs):
+        raise server.subprocess.TimeoutExpired(argv, 1)
+
+    monkeypatch.setattr(server.subprocess, "run", timeout_after_start)
+    result = server._run(["probe"], timeout=1)
+    assert result["succeeded"] is False
+    assert result["execution_started"] is True
+    assert result["timed_out"] is True
 
 
 def test_workflow_plan_is_project_bound_and_not_placeholder(tmp_path: Path):
@@ -73,7 +97,14 @@ def test_package_search_is_read_only_and_does_not_accept_source_agreements(monke
 
     def fake_run(argv, **kwargs):
         observed["argv"] = argv
-        return {"succeeded": True, "returncode": 0, "stdout": "Python.Python.3.12", "stderr": "", "argv": argv}
+        return {
+            "succeeded": True,
+            "returncode": 0,
+            "stdout": "Python.Python.3.12",
+            "stderr": "",
+            "argv": argv,
+            "execution_started": True,
+        }
 
     monkeypatch.setattr(server, "_run", fake_run)
     result = run(server.handle_package_search({"query": "Python 3.12", "source": "winget"}))
@@ -94,7 +125,14 @@ def test_package_install_plan_and_execute_share_one_host_authority_boundary(tmp_
     monkeypatch.setattr(
         server,
         "_run",
-        lambda argv, **_kwargs: {"succeeded": True, "returncode": 0, "stdout": "installed", "stderr": "", "argv": argv},
+        lambda argv, **_kwargs: {
+            "succeeded": True,
+            "returncode": 0,
+            "stdout": "installed",
+            "stderr": "",
+            "argv": argv,
+            "execution_started": True,
+        },
     )
     executed = run(server.handle_package_install({"package_id": "Python.Python.3.12", "execute": True}))
     assert executed["status"] == "completed"
@@ -111,12 +149,42 @@ def test_failed_executed_install_also_invalidates_cache(tmp_path: Path, monkeypa
     monkeypatch.setattr(
         server,
         "_run",
-        lambda argv, **_kwargs: {"succeeded": False, "returncode": 1, "stdout": "partial", "stderr": "failed", "argv": argv},
+        lambda argv, **_kwargs: {
+            "succeeded": False,
+            "returncode": 1,
+            "stdout": "partial",
+            "stderr": "failed",
+            "argv": argv,
+            "execution_started": True,
+        },
     )
     result = run(server.handle_package_install({"package_id": "Python.Python.3.12", "execute": True}))
     assert result["status"] == "failed"
     assert result["execution_started"] is True
+    assert result["environment_cache_invalidated"] is True
     assert not cache.exists()
+
+
+def test_package_install_spawn_failure_preserves_environment_cache(tmp_path: Path, monkeypatch):
+    cache = tmp_path / "environment.json"
+    cache.write_text("still-valid", encoding="utf-8")
+    monkeypatch.setattr(server, "ENVIRONMENT_CACHE_FILE", cache)
+    monkeypatch.setattr(server.shutil, "which", lambda _name: "fake.exe")
+    monkeypatch.setattr(
+        server,
+        "_run",
+        lambda argv, **_kwargs: {
+            "succeeded": False,
+            "error": "spawn failed",
+            "argv": argv,
+            "execution_started": False,
+        },
+    )
+    result = run(server.handle_package_install({"package_id": "Python.Python.3.12", "execute": True}))
+    assert result["status"] == "failed"
+    assert result["execution_started"] is False
+    assert result["environment_cache_invalidated"] is False
+    assert cache.read_text(encoding="utf-8") == "still-valid"
 
 
 def test_sandbox_auto_requires_isolation_discriminator(tmp_path: Path, monkeypatch):
@@ -237,6 +305,32 @@ def test_wsl_route_enters_project_and_uses_portable_sh(tmp_path: Path, monkeypat
     )
     assert result["argv"][:4] == ["wsl.exe", "--cd", str(tmp_path.resolve()), "--"]
     assert result["argv"][4:6] == ["sh", "-lc"]
+
+
+def test_captured_sandbox_spawn_failure_is_not_reported_as_started(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(server.shutil, "which", lambda name: "wsl.exe" if name in {"wsl", "wsl.exe"} else None)
+    monkeypatch.setattr(
+        server,
+        "_run",
+        lambda argv, **_kwargs: {
+            "succeeded": False,
+            "error": "spawn failed",
+            "argv": argv,
+            "execution_started": False,
+        },
+    )
+    result = run(
+        server.handle_sandbox_run(
+            {
+                "command": "pwd",
+                "workspace_folder": str(tmp_path),
+                "environment": "wsl",
+                "execute": True,
+            }
+        )
+    )
+    assert result["status"] == "failed"
+    assert result["execution_started"] is False
 
 
 def test_ecosystem_scan_project_scope_does_not_require_host_inventory(tmp_path: Path, monkeypatch):
