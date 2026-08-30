@@ -82,7 +82,7 @@ class EnvironmentDiscovery:
             raise DiscoveryError(f"Environment discovery failed: {e}") from e
 
     def _run_discovery(self) -> EnvironmentSnapshot:
-        """Execute PowerShell discovery script."""
+        """Execute the noninteractive PowerShell discovery script."""
         if not DISCOVERY_SCRIPT.exists():
             raise DiscoveryError(f"Discovery script not found: {DISCOVERY_SCRIPT}")
 
@@ -96,6 +96,7 @@ class EnvironmentDiscovery:
                     "-File",
                     str(DISCOVERY_SCRIPT),
                 ],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=30,
