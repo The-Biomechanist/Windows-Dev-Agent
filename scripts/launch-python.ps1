@@ -13,6 +13,20 @@ $MinimumPython = [Version]'3.11'
 $PluginRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $Candidates = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 
+function Test-FullyQualifiedWindowsPath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+
+    # Windows PowerShell 5.1 runs on .NET Framework, which does not expose
+    # Path.IsPathFullyQualified. Accept only drive-absolute, UNC, or extended
+    # Windows paths; reject drive-relative (C:foo) and rooted-relative (\foo).
+    if ($Path -match '^[A-Za-z]:[\\/]') { return $true }
+    if ($Path -match '^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$)') { return $true }
+    if ($Path -match '^\\\\\?\\[A-Za-z]:\\') { return $true }
+    if ($Path -match '^\\\\\?\\UNC\\[^\\]+\\[^\\]+(?:\\|$)') { return $true }
+    return $false
+}
+
 function Add-PythonCandidate {
     param([string]$Path)
     if ([string]::IsNullOrWhiteSpace($Path)) { return }
@@ -30,7 +44,7 @@ function Add-PythonCandidate {
 # A host may supply one already-resolved interpreter identity. Relative values are
 # rejected so this cannot reintroduce current-directory or PATH shadowing.
 if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_DEV_AGENT_PYTHON)) {
-    if (-not [IO.Path]::IsPathFullyQualified($env:WINDOWS_DEV_AGENT_PYTHON)) {
+    if (-not (Test-FullyQualifiedWindowsPath $env:WINDOWS_DEV_AGENT_PYTHON)) {
         [Console]::Error.WriteLine('WINDOWS_DEV_AGENT_PYTHON must be an absolute python.exe path.')
         exit 70
     }
