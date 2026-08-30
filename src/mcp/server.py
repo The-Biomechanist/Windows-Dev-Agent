@@ -4,11 +4,13 @@ This module owns Windows behavior. Host adapters own package identity, project
 binding, and human approval. Mutation-capable tools are plan-first, but the
 runtime does not try to encode a host permission event in model-controlled tool
 arguments. Forbidden capabilities remain blocked here as defense in depth.
+Plan fingerprints bind reviewed execution state; they never represent approval.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import logging
 import os
@@ -26,10 +28,12 @@ from src import __version__
 from src.capabilities import (
     CapabilityConfigError,
     command_display,
+    fingerprint_plan,
     load_capabilities,
     run_capability,
     select_available_tool,
 )
+from src.models.environment import EnvironmentSnapshot, SystemInfo
 from src.observability.trace import history_log_files
 
 logger = logging.getLogger(__name__)
@@ -52,6 +56,16 @@ def _default_project_dir() -> Path:
 
 def _bool_property(description: str, default: bool = False) -> dict[str, Any]:
     return {"type": "boolean", "description": description, "default": default}
+
+
+def _plan_fingerprint_property() -> dict[str, Any]:
+    return {
+        "type": "string",
+        "description": (
+            "Opaque fingerprint returned by execute:false; pass it unchanged with execute:true "
+            "so changed route/executable state fails closed"
+        ),
+    }
 
 
 TOOLS = [
@@ -79,7 +93,7 @@ TOOLS = [
     },
     {
         "name": "capability_run",
-        "description": "Plan or execute a named argv-based capability in the active project. The active host owns approval for the exact executing call.",
+        "description": "Plan or execute a named argv-based capability in the active project. Execution must carry the fresh plan fingerprint; the active host still owns approval for the exact executing call.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -88,6 +102,7 @@ TOOLS = [
                 "cwd": {"type": "string", "description": "Working directory; defaults to the active host project"},
                 "execute": _bool_property("Execute instead of returning the concrete plan"),
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600, "default": 120},
+                "plan_fingerprint": _plan_fingerprint_property(),
             },
             "required": ["capability"],
         },
@@ -119,20 +134,21 @@ TOOLS = [
     },
     {
         "name": "package_install",
-        "description": "Plan or execute one exact WinGet, Chocolatey, or Scoop install. Host approval surrounds the executing call.",
+        "description": "Plan or execute one exact WinGet, Chocolatey, or Scoop install. Execution must carry the fresh plan fingerprint; host approval surrounds that same executing call.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "package_id": {"type": "string"},
                 "source": {"type": "string", "enum": ["winget", "chocolatey", "scoop"], "default": "winget"},
                 "execute": _bool_property("Execute the reviewed install plan"),
+                "plan_fingerprint": _plan_fingerprint_property(),
             },
             "required": ["package_id"],
         },
     },
     {
         "name": "sandbox_run",
-        "description": "Plan or run a command through WSL, a project Dev Container, or Windows Sandbox using an explicit isolation requirement.",
+        "description": "Plan or run a command through WSL, a project Dev Container, or Windows Sandbox using an explicit isolation requirement. Execution must carry the fresh plan fingerprint.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -150,6 +166,7 @@ TOOLS = [
                     "description": "Workspace-relative files/directories staged read-only into Windows Sandbox; required for auto untrusted_windows routing",
                 },
                 "execute": _bool_property("Launch the reviewed route"),
+                "plan_fingerprint": _plan_fingerprint_property(),
             },
             "required": ["command"],
         },
@@ -245,6 +262,25 @@ def _invalidate_environment_cache() -> bool:
     return True
 
 
+def _guard_reviewed_plan(plan: dict[str, Any], supplied_fingerprint: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(supplied_fingerprint, str) or not supplied_fingerprint:
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "execute=true requires plan_fingerprint from a fresh reviewed plan",
+            "execution_started": False,
+        }
+    if supplied_fingerprint != plan["plan_fingerprint"]:
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "Execution route or executable state changed; obtain and review a fresh plan",
+            "submitted_plan_fingerprint": supplied_fingerprint,
+            "execution_started": False,
+        }
+    return None
+
+
 async def handle_env_inspect(args: dict[str, Any]) -> dict[str, Any]:
     try:
         from src.discovery.discovery import EnvironmentDiscovery
@@ -252,22 +288,17 @@ async def handle_env_inspect(args: dict[str, Any]) -> dict[str, Any]:
         snapshot = EnvironmentDiscovery(cache_enabled=True, data_dir=DATA_DIR).discover(
             force_refresh=bool(args.get("force_refresh", False))
         )
-        return {
-            "status": "ok" if snapshot.success else "degraded",
-            "snapshot": snapshot.to_dict(),
-        }
     except Exception as exc:
-        return {
-            "status": "degraded",
-            "error": str(exc),
-            "system": {"os_name": platform.system(), "os_version": platform.version()},
-            "runtimes": {
-                "python": {"available": True, "version": sys.version.split()[0]},
-                "node": {"available": shutil.which("node") is not None},
-                "cargo": {"available": shutil.which("cargo") is not None},
-                "git": {"available": shutil.which("git") is not None},
-            },
-        }
+        snapshot = EnvironmentSnapshot(
+            timestamp=datetime.now(),
+            success=False,
+            errors=[f"Environment discovery failed: {exc}"],
+            system=SystemInfo(os_name=platform.system(), os_version=platform.version()),
+        )
+    return {
+        "status": "ok" if snapshot.success else "degraded",
+        "snapshot": snapshot.to_dict(),
+    }
 
 
 async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
@@ -287,11 +318,12 @@ async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
             if not path:
                 output[group][command] = {"available": False, "version": None}
                 continue
-            probe = _run([command, "--version"], timeout=5)
+            executable = str(Path(path).resolve())
+            probe = _run([executable, "--version"], timeout=5)
             lines = (probe.get("stdout") or probe.get("stderr") or "").strip().splitlines()
             output[group][command] = {
                 "available": True,
-                "path": path,
+                "path": executable,
                 "version": lines[0] if probe.get("succeeded") and lines else None,
                 "version_status": "known" if probe.get("succeeded") and lines else "unknown",
             }
@@ -308,6 +340,7 @@ async def handle_capability_run(args: dict[str, Any]) -> dict[str, Any]:
         extra_args=args.get("extra_args") or [],
         cwd=str(cwd),
         timeout_seconds=int(args.get("timeout_seconds", 120)),
+        plan_fingerprint=args.get("plan_fingerprint"),
     )
 
 
@@ -449,13 +482,17 @@ async def handle_package_search(args: dict[str, Any]) -> dict[str, Any]:
     argv = commands.get(source)
     if argv is None:
         return {"status": "invalid_input", "error": f"Unsupported package source: {source}"}
-    if not shutil.which(argv[0]):
-        return {"status": "unavailable", "source": source, "error": f"{argv[0]} is not installed"}
-    result = _run(argv, timeout=90)
+    found = shutil.which(argv[0])
+    if not found:
+        return {"status": "unavailable", "source": source, "error": f"{argv[0]} is not installed", "execution_started": False}
+    executable = str(Path(found).resolve())
+    bound_argv = [executable, *argv[1:]]
+    result = _run(bound_argv, timeout=90)
     return {
         "status": "completed" if result.get("succeeded") else "failed",
         "query": query,
         "source": source,
+        "resolved_executable": executable,
         **result,
     }
 
@@ -464,7 +501,7 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
     package_id = str(args.get("package_id", ""))
     source = str(args.get("source", "winget"))
     if not _PACKAGE_ID.fullmatch(package_id):
-        return {"status": "invalid_input", "error": "package_id contains unsupported characters"}
+        return {"status": "invalid_input", "error": "package_id contains unsupported characters", "execution_started": False}
     commands = {
         "winget": ["winget", "install", "--id", package_id, "--exact", "--accept-package-agreements", "--accept-source-agreements"],
         "chocolatey": ["choco", "install", package_id, "-y"],
@@ -472,21 +509,43 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
     }
     argv = commands.get(source)
     if argv is None:
-        return {"status": "invalid_input", "error": f"Unsupported package source: {source}"}
+        return {"status": "invalid_input", "error": f"Unsupported package source: {source}", "execution_started": False}
+    found = shutil.which(argv[0])
+    if not found:
+        return {
+            "status": "unavailable",
+            "package_id": package_id,
+            "source": source,
+            "safety_class": "approval-required",
+            "error": f"{argv[0]} is not installed",
+            "execution_started": False,
+        }
+    executable = str(Path(found).resolve())
+    bound_argv = [executable, *argv[1:]]
+    plan_fields = {
+        "tool": "package_install",
+        "package_id": package_id,
+        "source": source,
+        "resolved_executable": executable,
+        "argv": bound_argv,
+    }
     plan = {
         "status": "planned",
         "package_id": package_id,
         "source": source,
         "safety_class": "approval-required",
-        "argv": argv,
-        "command": command_display(argv),
+        "resolved_executable": executable,
+        "argv": bound_argv,
+        "command": command_display(bound_argv),
+        "plan_fingerprint": fingerprint_plan(plan_fields),
         "requires_host_approval": True,
     }
     if not bool(args.get("execute", False)):
         return plan
-    if not shutil.which(argv[0]):
-        return {**plan, "status": "unavailable", "error": f"{argv[0]} is not installed", "execution_started": False}
-    result = _run(argv, timeout=600)
+    stale = _guard_reviewed_plan(plan, args.get("plan_fingerprint"))
+    if stale is not None:
+        return stale
+    result = _run(bound_argv, timeout=600)
     execution_started = result.get("execution_started") is True
     cache_invalidated = _invalidate_environment_cache() if execution_started else False
     return {
@@ -500,12 +559,12 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
 def _windows_sandbox_executable() -> Optional[str]:
     found = shutil.which("WindowsSandbox.exe") or shutil.which("WindowsSandbox")
     if found:
-        return found
+        return str(Path(found).resolve())
     windir = os.environ.get("WINDIR")
     if windir:
         candidate = Path(windir) / "System32" / "WindowsSandbox.exe"
         if candidate.exists():
-            return str(candidate)
+            return str(candidate.resolve())
     return None
 
 
@@ -582,8 +641,7 @@ def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[P
             return None, f"payload path escapes the workspace: {raw}"
 
         try:
-            candidates = _walk_payload(source)
-            for candidate in candidates:
+            for candidate in _walk_payload(source):
                 total_entries += 1
                 if total_entries > MAX_SANDBOX_PAYLOAD_ENTRIES:
                     return None, "payload selection exceeds the Sandbox staging entry budget"
@@ -605,10 +663,11 @@ def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[P
     return sources, None
 
 
-def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]]) -> tuple[Path, list[str]]:
-    sandbox_exe = _windows_sandbox_executable()
-    if not sandbox_exe:
-        raise RuntimeError("Windows Sandbox is not available")
+def _prepare_windows_sandbox(
+    command: str,
+    payloads: list[tuple[Path, Path]],
+    sandbox_executable: str,
+) -> tuple[Path, list[str]]:
     temp_dir = Path(tempfile.mkdtemp(prefix="windows-dev-agent-sandbox-"))
     try:
         payload_dir = temp_dir / "payload"
@@ -644,7 +703,7 @@ def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]]) ->
             "</Configuration>\n",
             encoding="utf-8",
         )
-        return config_path, [sandbox_exe, str(config_path)]
+        return config_path, [sandbox_executable, str(config_path)]
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
@@ -653,10 +712,10 @@ def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]]) ->
 async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
     command = str(args.get("command", "")).strip()
     if not command:
-        return {"status": "invalid_input", "error": "command is required"}
+        return {"status": "invalid_input", "error": "command is required", "execution_started": False}
     workspace, cwd_error = _resolve_dir(args.get("workspace_folder"))
     if cwd_error:
-        return {"status": "invalid_input", "error": cwd_error}
+        return {"status": "invalid_input", "error": cwd_error, "execution_started": False}
     assert workspace is not None
     requested_environment = str(args.get("environment", "auto"))
     requirement = args.get("isolation_requirement")
@@ -668,60 +727,82 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
             "environment": requested_environment,
             "isolation_requirement": isolation_requirement,
             "error": route_error,
+            "execution_started": False,
         }
     assert environment is not None
 
     payloads, payload_error = _payload_sources(workspace, args.get("payload_paths", []))
     if payload_error:
-        return {"status": "invalid_input", "error": payload_error}
+        return {"status": "invalid_input", "error": payload_error, "execution_started": False}
     assert payloads is not None
     if requested_environment == "auto" and isolation_requirement == "untrusted_windows" and not payloads:
         return {
             "status": "invalid_input",
             "error": "payload_paths is required for auto untrusted_windows routing so the isolated workload exists inside Windows Sandbox",
+            "execution_started": False,
         }
 
     if environment == "wsl":
-        executable = shutil.which("wsl") or shutil.which("wsl.exe")
-        if not executable:
-            return {"status": "unavailable", "environment": environment, "error": "WSL is not available"}
+        found = shutil.which("wsl") or shutil.which("wsl.exe")
+        if not found:
+            return {"status": "unavailable", "environment": environment, "error": "WSL is not available", "execution_started": False}
+        executable = str(Path(found).resolve())
         argv = [executable, "--cd", str(workspace), "--", "sh", "-lc", command]
         launch_kind = "captured"
     elif environment == "dev_container":
-        executable = shutil.which("devcontainer")
-        if not executable:
-            return {"status": "unavailable", "environment": environment, "error": "devcontainer CLI is not available"}
+        found = shutil.which("devcontainer")
+        if not found:
+            return {"status": "unavailable", "environment": environment, "error": "devcontainer CLI is not available", "execution_started": False}
+        executable = str(Path(found).resolve())
         argv = [executable, "exec", "--workspace-folder", str(workspace), "sh", "-lc", command]
         launch_kind = "captured"
     elif environment == "windows_sandbox":
         executable = _windows_sandbox_executable()
         if not executable:
-            return {"status": "unavailable", "environment": environment, "error": "Windows Sandbox is not available"}
+            return {"status": "unavailable", "environment": environment, "error": "Windows Sandbox is not available", "execution_started": False}
         argv = [executable, "<generated-on-execute>.wsb"]
         launch_kind = "interactive"
     else:
-        return {"status": "invalid_input", "error": f"Unsupported environment: {environment}"}
+        return {"status": "invalid_input", "error": f"Unsupported environment: {environment}", "execution_started": False}
 
+    payload_paths = [str(rel) for _, rel in payloads]
+    plan_fields = {
+        "tool": "sandbox_run",
+        "environment": environment,
+        "isolation_requirement": isolation_requirement,
+        "project_dir": str(workspace),
+        "payload_paths": payload_paths,
+        "resolved_executable": executable,
+        "argv": argv,
+        "inner_command": command,
+        "launch_kind": launch_kind,
+    }
     plan = {
         "status": "planned",
         "environment": environment,
         "isolation_requirement": isolation_requirement,
         "project_dir": str(workspace),
-        "payload_paths": [str(rel) for _, rel in payloads],
+        "payload_paths": payload_paths,
         "safety_class": "approval-required",
+        "resolved_executable": executable,
         "argv": argv,
         "command": command_display(argv),
+        "inner_command": command,
         "launch_kind": launch_kind,
+        "plan_fingerprint": fingerprint_plan(plan_fields),
         "requires_host_approval": True,
         "config_materialized_on_execute": environment == "windows_sandbox",
     }
     if not bool(args.get("execute", False)):
         return plan
+    stale = _guard_reviewed_plan(plan, args.get("plan_fingerprint"))
+    if stale is not None:
+        return stale
 
     if environment == "windows_sandbox":
         try:
-            config_path, launch_argv = _prepare_windows_sandbox(command, payloads)
-        except (OSError, RuntimeError) as exc:
+            config_path, launch_argv = _prepare_windows_sandbox(command, payloads, executable)
+        except OSError as exc:
             return {**plan, "status": "failed", "error": str(exc), "execution_started": False}
         try:
             process = subprocess.Popen(
