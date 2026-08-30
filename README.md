@@ -58,13 +58,15 @@ codex plugin add windows-dev-agent@windows-dev-agent
 
 The published marketplace entry is pinned to an immutable payload commit. Installed code is separate from `${CODEX_HOME:-~/.codex}/plugins/data/windows-dev-agent`, where WDA keeps its bounded cache and audit state.
 
+Codex uses the installed plugin root as the MCP server's startup working directory so the relative launcher path resolves inside plugin code. That startup directory is **not** treated as project identity: project-scoped WDA tools still require the current absolute Codex project directory explicitly.
+
 Codex plugin hooks are an additional trusted layer, not a replacement for native permissions. Until the user trusts those hooks, Codex's own MCP/shell approval policy remains the operative boundary. Mutation-capable WDA tools remain prompt-gated.
 
 ## Python bootstrap
 
 MCP servers and hooks do not execute a bare `python` from the active project's current directory or inherited PATH.
 
-`scripts/launch-python.ps1` resolves Python from Windows installation authorities and standard host installation locations, rejects interpreters older than 3.11, then launches the selected interpreter in isolated mode (`-I`). A managed host or CI environment may supply `WINDOWS_DEV_AGENT_PYTHON`, but it must be an **absolute `python.exe` path** and is version-checked before use.
+`scripts/launch-python.ps1` resolves Python from Windows installation authorities and standard host installation locations, rejects interpreters older than 3.11, then launches the selected interpreter in isolated mode (`-I`). A managed host or CI environment may supply `WINDOWS_DEV_AGENT_PYTHON`, but it must be an **absolute `python.exe` path** and is version-checked before use. The launcher is compatible with Windows PowerShell 5.1 and does not require newer .NET path APIs.
 
 The launcher then imports only the requested `src.*` WDA entrypoint from the plugin root. WDA never silently installs or upgrades the interpreter.
 
@@ -88,7 +90,7 @@ Claude's `PreToolUse` adapter can tighten the host decision (`ask` or `deny`) bu
 
 Claude project-scoped tools are restricted to `${CLAUDE_PROJECT_DIR}` or a descendant. Codex requires the current absolute project directory explicitly because installed plugin code lives in a separate cache.
 
-Project-local configuration reads—including `.mcp.json`, `.continue/config.json`, and `.vscode/extensions.json`—are checked component-by-component before use. A symbolic link or NTFS reparse point that would redirect a project-scoped read outside the intended tree is rejected rather than followed.
+Project-local configuration reads—including `.mcp.json`, `.continue/config.json`, `.vscode/extensions.json`, agent configuration markers, and Dev Container configuration detection—are checked component-by-component before use. A symbolic link or NTFS reparse point that would redirect a project-scoped read outside the intended tree is rejected rather than followed.
 
 MCP audit results contain structural metadata only. Raw command strings, URLs, argument values, and environment values are not returned.
 
@@ -102,7 +104,7 @@ Availability is tri-state:
 
 Native discovery is performed with Windows-owned PowerShell and returns one canonical `EnvironmentSnapshot` shape even when the probe degrades or fails unexpectedly.
 
-The cache uses the same canonical snapshot representation, is capped at 1 MiB, written atomically, and expires after five minutes. Package-install execution advances a mutation generation before the installer starts; a discovery that began against an older generation cannot later resurrect a stale cache entry.
+The cache uses the same canonical snapshot representation, is capped at 1 MiB, written atomically, and expires after five minutes. Package-install execution must first advance the cache mutation generation and invalidate the prior snapshot; if that authority transition cannot be established, the installer is not started. A discovery that began against an older generation cannot later resurrect a stale cache entry.
 
 ## Package execution
 
@@ -152,9 +154,9 @@ Only the generated payload share is mapped into Windows Sandbox and it is read-o
 <ClipboardRedirection>Disable</ClipboardRedirection>
 ```
 
-WDA owns the temporary bundle lifecycle: it removes the bundle after the Sandbox process exits when that lifecycle is observable and runs a stale-bundle janitor on later Sandbox launches. Callers are not given a host cleanup path to remember.
+WDA owns cleanup responsibility for its temporary Sandbox bundles. It performs best-effort cleanup after the launched Sandbox process exits when that process lifetime is usable as a cleanup witness, and it also runs stale-bundle collection at host startup and before later Sandbox launches. Callers are not given a host cleanup path to remember.
 
-A returned `launched` status proves only that Windows Sandbox was launched. It does not establish the inner command's success.
+A returned `launched` status proves only that Windows Sandbox was launched. It does not establish the inner command's success or that the launched process handle is a universal Windows Sandbox session-lifetime oracle.
 
 ## Audit and privacy
 
@@ -205,7 +207,7 @@ python -m compileall -q src
 python -m pytest tests -q
 ```
 
-GitHub Actions runs on `windows-latest` against the supported Python floor and a current Python release, currently 3.11 and 3.14. CI also exercises the shipped PowerShell discovery producer, the isolated Python launcher, both MCP adapter surfaces, Windows reparse/junction containment, and the published-release ancestry contract.
+GitHub Actions runs on `windows-latest` against the supported Python floor and a current Python release, currently 3.11 and 3.14. CI also exercises the shipped Windows PowerShell 5.1 bootstrap path, the native PowerShell discovery producer, both MCP adapter surfaces, Windows reparse/junction containment, and the published-release ancestry contract.
 
 A green CI run supports only the surfaces those checks can observe. It does not establish that a person accepted a real Claude/Codex permission dialog, that an installed host UI behaves identically to the test harness, or that an interactive Windows Sandbox workload completed on an end-user desktop.
 
