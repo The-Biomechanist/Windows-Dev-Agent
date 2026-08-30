@@ -1,6 +1,6 @@
 """Claude Code PreToolUse safety gate.
 
-Command hooks receive the complete hook event as JSON on stdin.  This module
+Command hooks receive the complete hook event as JSON on stdin. This module
 classifies the requested tool call and returns Claude Code's structured
 ``permissionDecision`` output:
 
@@ -8,7 +8,7 @@ classifies the requested tool call and returns Claude Code's structured
 - approval-required / checkpoint -> ask the human
 - forbidden -> deny
 
-This is deliberately host-enforced.  A model-provided ``user_approved`` flag is
+This is deliberately host-enforced. A model-provided ``user_approved`` flag is
 not sufficient to skip the permission dialog.
 """
 
@@ -21,10 +21,14 @@ import re
 import sys
 from typing import Any
 
+# Hook scripts are invoked by absolute path from an installed plugin cache. Put
+# the plugin root on sys.path before importing sibling runtime modules.
+ROOT = Path(__file__).resolve().parent.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from src.capabilities import CapabilityConfigError, load_capabilities
 from src.observability.trace import append_event
-
-ROOT = Path(__file__).resolve().parent.parent.parent
 
 READ_ONLY_PATTERNS = [
     re.compile(r"^\s*(git\s+(status|log|diff|show)|Get-[\w-]+|Test-Path|Resolve-Path|where(\.exe)?\b)", re.I),
@@ -55,7 +59,7 @@ FORBIDDEN_PATTERNS = [
 def classify_bash(command: str) -> str:
     """Classify a shell command conservatively.
 
-    Unknown commands ask rather than silently running.  This sacrifices a small
+    Unknown commands ask rather than silently running. This sacrifices a small
     amount of autonomy to prevent a missed regex from becoming an implicit
     mutation permission.
     """
@@ -95,8 +99,12 @@ def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
         return "read-only"
 
     execute = bool(tool_input.get("execute", False))
-    if short_name in {"package_install", "sandbox_run"}:
+    if short_name == "package_install":
         return "approval-required" if execute else "read-only"
+    if short_name == "sandbox_run":
+        # Planning Windows Sandbox can materialize a temporary .wsb bundle, so
+        # it is reversible rather than strictly read-only even when not launched.
+        return "approval-required" if execute else "reversible"
 
     if short_name == "capability_run":
         if not execute:
