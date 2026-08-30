@@ -6,6 +6,7 @@ import sys
 
 import pytest
 
+from src import capabilities
 from src.capabilities import (
     CapabilityConfigError,
     effective_safety,
@@ -117,6 +118,27 @@ def test_read_only_capability_with_extra_args_is_not_silently_read_only(tmp_path
     plan = run_capability("probe", execute=False, extra_args=["--anything"], path=catalog)
     assert plan["base_safety_class"] == "read-only"
     assert plan["safety_class"] == "approval-required"
+
+
+def test_capability_subprocess_cannot_consume_mcp_stdin(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.yaml"
+    _write_catalog(catalog, "read-only")
+    observed = {}
+
+    class Result:
+        returncode = 0
+        stdout = "runtime-ok\n"
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        observed["argv"] = argv
+        observed.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr(capabilities.subprocess, "run", fake_run)
+    result = run_capability("probe", execute=True, path=catalog)
+    assert result["status"] == "completed"
+    assert observed["stdin"] is capabilities.subprocess.DEVNULL
 
 
 def test_forbidden_capability_never_executes(tmp_path: Path):
