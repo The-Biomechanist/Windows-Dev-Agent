@@ -18,10 +18,13 @@ Operate from the actual Windows host and task state. Prefer native Windows contr
 
 The bundled Claude Code `PreToolUse` hook covers Bash, the native PowerShell tool, and the executing Windows Dev Agent MCP mutation surfaces. It classifies the **effective requested action**, not only the nominal launcher or capability name.
 
-- only actions proven `read-only` are auto-allowed;
-- `reversible`, `approval-required`, and `checkpoint` actions return `permissionDecision: ask` so normal host permission remains in force;
+The hook is tightening-only over Claude Code's native permission system:
+
+- it never returns `permissionDecision: allow`;
+- `read-only` and `reversible` classifications make no plugin permission decision, so Claude Code's ordinary permission flow remains authoritative;
+- `approval-required` and `checkpoint` actions return `permissionDecision: ask`;
 - `forbidden` actions return `permissionDecision: deny`;
-- unknown or compound Bash/PowerShell commands ask rather than inheriting a read-only prefix;
+- unknown, compound, redirected, substituted, or dynamically invoked Bash/PowerShell commands require approval rather than inheriting a read-only prefix;
 - caller-supplied `extra_args` upgrade a capability request to approval-required instead of inheriting the base capability's weaker class.
 
 Never treat `user_approved: true` in an MCP input as authority to bypass the host hook; it is only a server-side acknowledgement used in the defense-in-depth execution path.
