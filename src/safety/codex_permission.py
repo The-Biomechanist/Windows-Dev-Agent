@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
 import sys
 from typing import Any, Optional
@@ -36,21 +35,22 @@ PROJECT_PLAN_ARGS = {
 
 
 def _inside_session_cwd(event: dict[str, Any], tool_input: dict[str, Any], argument: str) -> bool:
-    """Lexically prove a caller path is no broader than Codex's active cwd.
+    """Prove a caller path resolves no broader than Codex's active cwd.
 
-    The hook event owns the session cwd. This comparison deliberately avoids
-    resolving filesystem links: the auto-allowed plans covered here do not read
-    project contents. Calls that can enumerate files are never auto-allowed.
+    Both paths are resolved through the host filesystem before comparison so a
+    junction/symlink inside the lexical project cannot silently escape the
+    trusted session boundary.
     """
     session_cwd = str(event.get("cwd", "")).strip()
     requested = str(tool_input.get(argument, "")).strip()
     if not session_cwd or not requested:
         return False
     try:
-        root = os.path.normcase(os.path.abspath(os.path.expanduser(session_cwd)))
-        candidate = os.path.normcase(os.path.abspath(os.path.expanduser(requested)))
-        return os.path.commonpath([root, candidate]) == root
-    except (OSError, ValueError):
+        root = Path(session_cwd).expanduser().resolve()
+        candidate = Path(requested).expanduser().resolve()
+        candidate.relative_to(root)
+        return True
+    except (OSError, RuntimeError, ValueError):
         return False
 
 
