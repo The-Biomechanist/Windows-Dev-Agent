@@ -46,6 +46,44 @@ def test_execution_outcome_preserves_plan_success_failure_launch_and_unknown():
     assert trace.derive_execution_outcome(_hook({"execute": True}, None))[0] == "unknown"
 
 
+def test_external_execution_without_execute_flag_uses_returned_result_evidence():
+    completed = _hook(
+        {"query": "Python"},
+        {"content": [{"type": "text", "text": '{"status":"completed","succeeded":true,"execution_started":true}'}]},
+    )
+    completed["tool_name"] = "mcp__windows-dev-agent__package_search"
+    assert trace.derive_execution_outcome(completed) == ("succeeded", "completed")
+
+    failed = _hook(
+        {"query": "Python"},
+        {"content": [{"type": "text", "text": '{"status":"failed","succeeded":false,"execution_started":true}'}]},
+    )
+    failed["tool_name"] = "mcp__windows-dev-agent__package_search"
+    assert trace.derive_execution_outcome(failed) == ("failed", "failed")
+
+    not_started = _hook(
+        {"query": "Python"},
+        {"content": [{"type": "text", "text": '{"status":"failed","succeeded":false,"execution_started":false}'}]},
+    )
+    not_started["tool_name"] = "mcp__windows-dev-agent__package_search"
+    assert trace.derive_execution_outcome(not_started) == ("not_executed", "failed")
+
+
+def test_post_tool_failure_without_execute_flag_is_still_a_tool_failure():
+    payload = _hook({"query": "Python"}, None, event="PostToolUseFailure")
+    payload["tool_name"] = "mcp__windows-dev-agent__package_search"
+    assert trace.derive_execution_outcome(payload)[0] == "failed"
+
+
+def test_result_without_execution_contract_remains_not_applicable():
+    payload = _hook(
+        {"cwd": "project"},
+        {"content": [{"type": "text", "text": '{"status":"issues_found","server_count":2}'}]},
+    )
+    payload["tool_name"] = "mcp__windows-dev-agent__mcp_audit"
+    assert trace.derive_execution_outcome(payload) == ("not_applicable", "issues_found")
+
+
 def test_session_filter_never_launders_other_session_events(tmp_path: Path):
     log = tmp_path / "agent.log"
     log.write_text(
