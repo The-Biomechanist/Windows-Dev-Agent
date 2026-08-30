@@ -548,12 +548,20 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
         return {**plan, "status": "unavailable", "error": f"{configured[0]} is not installed", "execution_started": False}
 
     cache_invalidated = invalidate_environment_cache(DATA_DIR)
+    if not cache_invalidated:
+        return {
+            **plan,
+            "status": "failed",
+            "error": "Environment cache invalidation could not be established; installer was not started",
+            "execution_started": False,
+            "environment_cache_invalidated": False,
+        }
     result = run_bounded(resolved, timeout=600)
     return {
         **plan,
         **result,
         "status": "completed" if result.get("succeeded") else "failed",
-        "environment_cache_invalidated": cache_invalidated,
+        "environment_cache_invalidated": True,
     }
 
 
@@ -584,7 +592,12 @@ def _select_sandbox(environment: str, isolation_requirement: Optional[str], work
     if selected == "wsl" and not _wsl_executable():
         return None, "Windows-owned WSL executable is not available for linux_compatibility", "unavailable"
     if selected == "dev_container":
-        has_config = (workspace / ".devcontainer").exists() or (workspace / ".devcontainer.json").exists()
+        has_config = False
+        for config_path in (workspace / ".devcontainer", workspace / ".devcontainer.json"):
+            exists, containment_error = _project_path_status(workspace, config_path)
+            if containment_error:
+                return None, containment_error, "invalid_input"
+            has_config = has_config or exists
         if not resolve_executable("devcontainer") or not has_config:
             return None, "A configured Dev Container and devcontainer CLI are required for project_reproducibility", "unavailable"
     if selected == "windows_sandbox" and not _windows_sandbox_executable():
