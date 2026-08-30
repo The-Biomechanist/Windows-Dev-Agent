@@ -1,8 +1,8 @@
-"""Minimal structured audit logger for Windows Dev Agent hook events.
+"""Minimal provenance-bound audit state for Windows Dev Agent hooks.
 
-Persistent audit state intentionally records only the metadata consumed by the
-plugin's audit surfaces. Raw tool inputs, command bodies, stdout/stderr, and
-arbitrary tool responses are not persisted here.
+Raw commands, tool inputs, stdout/stderr, and arbitrary responses are never
+persisted. Tool responses may be inspected in memory only to derive the small
+result-status/execution-outcome fields consumed by audit summaries.
 """
 
 from __future__ import annotations
@@ -25,12 +25,91 @@ def resolve_log_file(data_dir: Optional[str] = None) -> Path:
     return directory / "agent.log"
 
 
+def _decode_result_payload(response: Any) -> Optional[dict[str, Any]]:
+    if isinstance(response, dict):
+        if isinstance(response.get("status"), str):
+            return response
+        if isinstance(response.get("result"), dict):
+            nested = _decode_result_payload(response["result"])
+            if nested is not None:
+                return nested
+        content = response.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    try:
+                        value = json.loads(item["text"])
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(value, dict):
+                        return value
+    if isinstance(response, str):
+        try:
+            value = json.loads(response)
+        except json.JSONDecodeError:
+            return None
+        return value if isinstance(value, dict) else None
+    return None
+
+
+def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str]]:
+    tool_input = payload.get("tool_input") or {}
+    if not isinstance(tool_input, dict) or "execute" not in tool_input:
+        return "not_applicable", None
+    if not bool(tool_input.get("execute", False)):
+        return "not_executed", "planned"
+
+    hook_event = str(payload.get("hook_event_name", ""))
+    result = _decode_result_payload(payload.get("tool_response"))
+    status = str(result.get("status")) if isinstance(result, dict) and result.get("status") is not None else None
+    if hook_event == "PostToolUseFailure":
+        return "failed", status
+    if result is None:
+        return "unknown", None
+
+    if status == "completed":
+        succeeded = result.get("succeeded")
+        if succeeded is True:
+            return "succeeded", status
+        if succeeded is False:
+            return "failed", status
+        returncode = result.get("returncode")
+        if isinstance(returncode, int):
+            return ("succeeded" if returncode == 0 else "failed"), status
+        return "unknown", status
+    if status == "failed":
+        return ("failed" if result.get("execution_started") is not False else "not_executed"), status
+    if status == "launched":
+        return "unknown", status
+    if status in {
+        "planned",
+        "blocked",
+        "unavailable",
+        "invalid_input",
+        "approval_required",
+        "unknown_capability",
+        "configuration_error",
+    }:
+        return "not_executed", status
+    return "unknown", status
+
+
 def event_from_hook(payload: dict[str, Any]) -> dict[str, Any]:
     hook_event = str(payload.get("hook_event_name", "unknown"))
+    lifecycle_success: Optional[bool]
+    if hook_event == "PostToolUse":
+        lifecycle_success = True
+    elif hook_event == "PostToolUseFailure":
+        lifecycle_success = False
+    else:
+        lifecycle_success = None
+    execution_outcome, result_status = derive_execution_outcome(payload)
     return {
         "ts": datetime.now(timezone.utc).isoformat(),
         "event": hook_event,
-        "success": hook_event != "PostToolUseFailure",
+        "success": lifecycle_success,
+        "execution_outcome": execution_outcome,
+        "result_status": result_status,
         "session_id": payload.get("session_id"),
         "agent_id": payload.get("agent_id"),
         "agent_type": payload.get("agent_type"),
