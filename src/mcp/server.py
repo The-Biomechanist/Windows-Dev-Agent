@@ -63,7 +63,7 @@ TOOLS = [
     },
     {
         "name": "tool_discover",
-        "description": "Discover common runtimes, editors, package managers, and version-control tools.",
+        "description": "Discover common runtimes, editors, package managers, and version-control tools by resolving executables and running bounded version probes. External execution remains host-controlled.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -105,7 +105,7 @@ TOOLS = [
     },
     {
         "name": "package_search",
-        "description": "Search one installed Windows package manager for candidate package identities before installation.",
+        "description": "Execute one installed Windows package manager to search its configured source for candidate identities before installation. The requested effect is diagnostic, but external execution remains host-controlled.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -503,14 +503,17 @@ def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[P
         if not source.exists():
             return None, f"payload path does not exist: {raw}"
 
-        candidates = [source]
+        candidates = (candidate for candidate in ([source] if not source.is_dir() else [source]))
         if source.is_dir():
-            candidates.extend(source.rglob("*"))
-        total_entries += len(candidates)
-        if total_entries > MAX_SANDBOX_PAYLOAD_ENTRIES:
-            return None, "payload selection exceeds the Sandbox staging entry budget"
+            candidates = iter((source, *()))
+            # Chain lazily without materializing the directory tree.
+            from itertools import chain
+            candidates = chain((source,), source.rglob("*"))
 
         for candidate in candidates:
+            total_entries += 1
+            if total_entries > MAX_SANDBOX_PAYLOAD_ENTRIES:
+                return None, "payload selection exceeds the Sandbox staging entry budget"
             if candidate.is_symlink():
                 return None, f"payload contains a symbolic link: {candidate}"
             try:
@@ -687,14 +690,15 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
 
 def _safe_json(path: Path) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     try:
-        size = path.stat().st_size
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_JSON_CONFIG_BYTES + 1)
     except OSError as exc:
         return None, str(exc)
-    if size > MAX_JSON_CONFIG_BYTES:
+    if len(raw) > MAX_JSON_CONFIG_BYTES:
         return None, f"JSON config exceeds {MAX_JSON_CONFIG_BYTES} byte read limit"
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return None, str(exc)
     return (value, None) if isinstance(value, dict) else (None, "root JSON value is not an object")
 
