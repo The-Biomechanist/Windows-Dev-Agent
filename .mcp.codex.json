@@ -1,5 +1,5 @@
 {
-  "windows-dev-agent": {
+  "windows_dev_agent": {
     "command": "python",
     "args": ["-m", "src.codex_server"],
     "cwd": ".",
