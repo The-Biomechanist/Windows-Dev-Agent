@@ -96,6 +96,7 @@ def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str
         return "unknown", status
     if status in {
         "planned",
+        "stale_plan",
         "blocked",
         "unavailable",
         "invalid_input",
