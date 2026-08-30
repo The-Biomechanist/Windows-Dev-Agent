@@ -166,6 +166,24 @@ def test_payload_rejects_workspace_escape_and_symlink(tmp_path: Path):
     assert sources is None and "workspace" in error
 
 
+def test_payload_rejects_overlapping_roots(tmp_path: Path):
+    folder = tmp_path / "bundle"
+    folder.mkdir()
+    (folder / "inside.bin").write_bytes(b"x")
+    sources, error = server._payload_sources(tmp_path, ["bundle", "bundle/inside.bin"])
+    assert sources is None
+    assert "overlap" in error
+
+
+def test_payload_byte_budget_is_enforced(tmp_path: Path, monkeypatch):
+    payload = tmp_path / "large.bin"
+    payload.write_bytes(b"12345")
+    monkeypatch.setattr(server, "MAX_SANDBOX_PAYLOAD_BYTES", 4)
+    sources, error = server._payload_sources(tmp_path, ["large.bin"])
+    assert sources is None
+    assert "byte budget" in error
+
+
 def test_windows_sandbox_stages_payload_read_only_bundle(tmp_path: Path, monkeypatch):
     payload = tmp_path / "artifact.bin"
     payload.write_bytes(b"payload")
@@ -185,6 +203,24 @@ def test_windows_sandbox_stages_payload_read_only_bundle(tmp_path: Path, monkeyp
     finally:
         import shutil
         shutil.rmtree(config.parent, ignore_errors=True)
+
+
+def test_failed_sandbox_staging_removes_partial_bundle(tmp_path: Path, monkeypatch):
+    payload = tmp_path / "artifact.bin"
+    payload.write_bytes(b"payload")
+    staging = tmp_path / "staging"
+    monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: "WindowsSandbox.exe")
+    monkeypatch.setattr(server.tempfile, "mkdtemp", lambda **_kwargs: str(staging))
+    monkeypatch.setattr(server.shutil, "copy2", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("copy failed")))
+    sources, error = server._payload_sources(tmp_path, ["artifact.bin"])
+    assert error is None
+    try:
+        server._prepare_windows_sandbox("type artifact.bin", sources)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("staging failure was not surfaced")
+    assert not staging.exists()
 
 
 def test_wsl_route_enters_project_and_uses_portable_sh(tmp_path: Path, monkeypatch):
@@ -234,13 +270,27 @@ def test_logs_query_filters_host_neutral_permission_decisions(tmp_path: Path, mo
     assert result["matched"] == 2
 
 
-def test_mcp_audit_defaults_to_project_and_redacts_env_values(tmp_path: Path):
+def test_mcp_audit_defaults_to_project_and_exposes_only_structural_metadata(tmp_path: Path):
     config = tmp_path / ".mcp.json"
     config.write_text(
-        '{"mcpServers":{"example":{"command":"python","args":["server.py"],"env":{"TOKEN":"secret"}}}}',
+        '{"mcpServers":{"example":{"command":"secret-cli --token secret","args":["server.py"],"env":{"TOKEN":"secret"}}}}',
         encoding="utf-8",
     )
     result = run(server.handle_mcp_audit({"cwd": str(tmp_path)}))
     assert result["host_inventory_included"] is False
     assert result["server_count"] == 1
-    assert "secret" not in str(result)
+    serialized = json.dumps(result)
+    assert "secret" not in serialized
+    entry = result["configs"][0]["servers"][0]
+    assert entry["transport"] == "command"
+    assert entry["has_command"] is True
+    assert "command" not in entry
+
+
+def test_json_config_read_budget_is_enforced(tmp_path: Path, monkeypatch):
+    config = tmp_path / ".mcp.json"
+    config.write_text('{"mcpServers":{}}', encoding="utf-8")
+    monkeypatch.setattr(server, "MAX_JSON_CONFIG_BYTES", 4)
+    data, error = server._safe_json(config)
+    assert data is None
+    assert "read limit" in error
