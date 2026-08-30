@@ -2,7 +2,8 @@
 
 Raw commands, tool inputs, stdout/stderr, and arbitrary responses are never
 persisted. Tool responses may be inspected in memory only to derive the small
-result-status/execution-outcome fields consumed by audit summaries.
+result-status/execution-outcome fields consumed by audit summaries. Audit
+retention is bounded to the current log plus one rotated predecessor.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DATA_DIR = ROOT / ".cache"
+MAX_LOG_BYTES = 2 * 1024 * 1024
 
 
 def resolve_log_file(data_dir: Optional[str] = None) -> Path:
@@ -120,9 +122,22 @@ def event_from_hook(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _rotate_if_needed(target: Path) -> None:
+    try:
+        if not target.exists() or target.stat().st_size < MAX_LOG_BYTES:
+            return
+        backup = target.with_name(target.name + ".1")
+        backup.unlink(missing_ok=True)
+        target.replace(backup)
+    except OSError:
+        # Logging must never become an execution blocker.
+        return
+
+
 def append_event(event: dict[str, Any], log_file: Optional[Path] = None) -> None:
     target = log_file or resolve_log_file()
     target.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_if_needed(target)
     with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
 
