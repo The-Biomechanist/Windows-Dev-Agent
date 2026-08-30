@@ -32,7 +32,7 @@ def test_trace_persists_derived_metadata_not_payloads():
     assert "another-secret" not in serialized
 
 
-def test_execution_outcome_preserves_plan_success_failure_launch_and_unknown():
+def test_execution_outcome_preserves_plan_success_failure_launch_stale_and_unknown():
     assert trace.derive_execution_outcome(_hook({"execute": False}))[0] == "not_executed"
     assert trace.derive_execution_outcome(
         _hook({"execute": True}, {"content": [{"type": "text", "text": '{"status":"completed","succeeded":true}'}]})
@@ -43,6 +43,9 @@ def test_execution_outcome_preserves_plan_success_failure_launch_and_unknown():
     assert trace.derive_execution_outcome(
         _hook({"execute": True}, {"content": [{"type": "text", "text": '{"status":"launched"}'}]})
     )[0] == "unknown"
+    assert trace.derive_execution_outcome(
+        _hook({"execute": True}, {"content": [{"type": "text", "text": '{"status":"stale_plan","execution_started":false}'}]})
+    ) == ("not_executed", "stale_plan")
     assert trace.derive_execution_outcome(_hook({"execute": True}, None))[0] == "unknown"
 
 
