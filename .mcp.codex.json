@@ -4,6 +4,7 @@
     "args": ["-m", "src.codex_server"],
     "cwd": ".",
     "env": {"WINDOWS_DEV_AGENT_HOST": "codex"},
+    "tool_timeout_sec": 610,
     "default_tools_approval_mode": "prompt",
     "tools": {
       "env_inspect": {"approval_mode": "approve"},
