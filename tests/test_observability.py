@@ -46,6 +46,14 @@ def test_execution_outcome_preserves_plan_success_failure_launch_and_unknown():
     assert trace.derive_execution_outcome(_hook({"execute": True}, None))[0] == "unknown"
 
 
+def test_executing_timeout_preserves_unknown_effect_state():
+    payload = _hook(
+        {"execute": True},
+        {"content": [{"type": "text", "text": '{"status":"failed","succeeded":false,"execution_started":true,"timed_out":true}'}]},
+    )
+    assert trace.derive_execution_outcome(payload) == ("unknown", "failed")
+
+
 def test_external_execution_without_execute_flag_uses_returned_result_evidence():
     completed = _hook(
         {"query": "Python"},
