@@ -1,15 +1,18 @@
 ---
-description: Run a full Windows environment snapshot. Shows OS, runtimes, installed tools, WSL distros, Dev Drive, package managers, and editor availability.
+description: Inspect the Windows development environment and, when relevant, the surrounding agent/tool configuration surface.
 ---
 
-Run a full environment discovery using the windows-dev-agent MCP tool `env_inspect`.
+Call `env_inspect` for machine/runtime/toolchain state.
 
-Present results in clean sections:
-- System (OS build, architecture, memory, CPU)
-- Virtualization (Hyper-V, WSL distros, Windows Sandbox, Dev Drive)
-- Package managers (WinGet, Chocolatey, Scoop — what's available)
-- Runtimes (Python, Node, Rust, Go, .NET — versions)
-- Dev tools (Git config, Docker, editors)
-- Agent surface (MCP servers, VS Code extensions, shell modules)
+Present only relevant sections from the observed snapshot, such as:
 
-Flag anything that looks broken, missing, or misconfigured. Suggest fixes using WinGet where possible.
+- Windows version/build and architecture;
+- CPU/memory when material to the task;
+- PowerShell and package-manager availability;
+- Python, Node, Rust, Go, .NET and other relevant runtimes;
+- WSL / Windows Sandbox / virtualization state when isolation matters;
+- Git, Docker, editors, or build tools when they bear on the request.
+
+If the user also wants MCP servers, VS Code agent extensions, project agent configs, or installed Claude plugins, call `ecosystem_scan`. Do not imply `env_inspect` established those surfaces when it did not.
+
+Distinguish missing, unavailable, misconfigured, and simply uninspected state. Suggest repairs only for conditions that actually block the requested task.
