@@ -158,6 +158,33 @@ def test_successful_package_install_invalidates_environment_cache(tmp_path: Path
     assert not cache.exists()
 
 
+def test_failed_package_install_also_invalidates_environment_cache(tmp_path: Path, monkeypatch):
+    cache = tmp_path / "environment.json"
+    cache.write_text("stale", encoding="utf-8")
+    monkeypatch.setattr(server, "ENVIRONMENT_CACHE_FILE", cache)
+    monkeypatch.setattr(server.shutil, "which", lambda _name: "fake.exe")
+    monkeypatch.setattr(
+        server,
+        "_run",
+        lambda argv, **_kwargs: {
+            "succeeded": False,
+            "returncode": 1,
+            "stdout": "partial work may have occurred",
+            "stderr": "installer failed",
+            "argv": argv,
+        },
+    )
+
+    result = run(
+        server.handle_package_install(
+            {"package_id": "Python.Python.3.12", "execute": True, "user_approved": True}
+        )
+    )
+    assert result["status"] == "failed"
+    assert result["environment_cache_invalidated"] is True
+    assert not cache.exists()
+
+
 def test_sandbox_auto_requires_isolation_discriminator(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("WINDOWS_DEV_AGENT_PROJECT_DIR", str(tmp_path))
     monkeypatch.setattr(server.shutil, "which", lambda _name: "available.exe")
