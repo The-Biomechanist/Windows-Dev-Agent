@@ -1,0 +1,60 @@
+{
+  "inspect-git": {
+    "description": "Inspect the current Git working tree without mutating it.",
+    "safety": "read-only",
+    "tags": ["git", "inspection"],
+    "tools": [
+      {"name": "git", "argv": ["git", "status", "--short", "--branch"]}
+    ]
+  },
+  "lint-python": {
+    "description": "Run an installed Python linter against the current project.",
+    "safety": "reversible",
+    "tags": ["python", "lint"],
+    "tools": [
+      {"name": "ruff", "argv": ["ruff", "check", "."]},
+      {"name": "pylint", "argv": ["pylint", "."]}
+    ]
+  },
+  "lint-javascript": {
+    "description": "Run an installed JavaScript or TypeScript linter against the current project.",
+    "safety": "reversible",
+    "tags": ["javascript", "typescript", "lint"],
+    "tools": [
+      {"name": "eslint", "argv": ["eslint", "."]},
+      {"name": "dprint", "argv": ["dprint", "check"]}
+    ]
+  },
+  "test-python": {
+    "description": "Run the Python test suite with pytest.",
+    "safety": "reversible",
+    "tags": ["python", "test"],
+    "tools": [
+      {"name": "pytest", "argv": ["pytest"]}
+    ]
+  },
+  "test-dotnet": {
+    "description": "Run the .NET test suite in the current project.",
+    "safety": "reversible",
+    "tags": ["dotnet", "test"],
+    "tools": [
+      {"name": "dotnet", "argv": ["dotnet", "test"]}
+    ]
+  },
+  "build-dotnet": {
+    "description": "Build the current .NET project using the native dotnet toolchain.",
+    "safety": "reversible",
+    "tags": ["dotnet", "build"],
+    "tools": [
+      {"name": "dotnet", "argv": ["dotnet", "build"]}
+    ]
+  },
+  "create-pr": {
+    "description": "Create a GitHub pull request from the current branch using the GitHub CLI.",
+    "safety": "approval-required",
+    "tags": ["git", "github", "publish"],
+    "tools": [
+      {"name": "gh", "argv": ["gh", "pr", "create", "--fill"]}
+    ]
+  }
+}
