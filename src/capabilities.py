@@ -47,7 +47,7 @@ class Capability:
 
     @property
     def requires_approval(self) -> bool:
-        return self.safety == "approval-required"
+        return self.safety in {"reversible", "approval-required"}
 
     @property
     def forbidden(self) -> bool:
@@ -168,9 +168,6 @@ def effective_safety(capability: Capability, extra_args: list[str]) -> str:
     if capability.forbidden:
         return "forbidden"
     if extra_args:
-        # Extra caller-controlled arguments can change semantics (for example a
-        # linter's --fix flag). Require host approval instead of inheriting the
-        # catalog's base class.
         return "approval-required"
     return capability.safety
 
@@ -185,7 +182,12 @@ def run_capability(
     timeout_seconds: int = 120,
     path: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """Plan or execute a configured capability."""
+    """Plan or execute a configured capability.
+
+    The Claude Code hook is the host permission authority. The server also
+    requires an explicit acknowledgement for reversible and approval-required
+    execution so direct MCP use cannot silently bypass the same boundary.
+    """
     capabilities = load_capabilities(path)
     capability = capabilities.get(capability_id)
     if capability is None:
@@ -211,6 +213,7 @@ def run_capability(
 
     safety_class = effective_safety(capability, extra_args)
     argv = [*tool.argv, *extra_args]
+    requires_user_approval = safety_class in {"reversible", "approval-required"}
     plan: dict[str, Any] = {
         "status": "planned",
         "capability": capability.id,
@@ -222,18 +225,18 @@ def run_capability(
         "command": command_display(argv),
         "verify_argv": list(tool.verify_argv),
         "rollback_argv": list(tool.rollback_argv),
-        "requires_user_approval": safety_class in {"reversible", "approval-required"},
+        "requires_user_approval": requires_user_approval,
     }
 
     if not execute:
         return plan
     if safety_class == "forbidden":
         return {**plan, "status": "blocked", "error": "Capability is forbidden"}
-    if safety_class == "approval-required" and not user_approved:
+    if requires_user_approval and not user_approved:
         return {
             **plan,
             "status": "approval_required",
-            "error": "Host approval is required for the effective capability request",
+            "error": "Host approval acknowledgement is required for this effective capability request",
         }
 
     run_cwd: Optional[Path] = None
