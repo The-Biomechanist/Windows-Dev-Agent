@@ -23,7 +23,7 @@ DISCOVERY_TIMEOUT_SECONDS = 30
 
 
 class DiscoveryError(Exception):
-    """Raised when discovery cannot produce even a degraded snapshot."""
+    """Raised internally when the native probe cannot produce a parsed snapshot."""
 
 
 def _system_powershell() -> Optional[Path]:
@@ -49,8 +49,6 @@ class EnvironmentDiscovery:
         ).expanduser()
         self.cache_dir = Path(configured).expanduser()
         self.cache_file = self.cache_dir / "environment.json"
-        if self.cache_enabled:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def discover(self, force_refresh: bool = False) -> EnvironmentSnapshot:
         if self.cache_enabled and not force_refresh:
@@ -58,7 +56,10 @@ class EnvironmentDiscovery:
             if cached is not None:
                 return cached
 
-        snapshot = self._run_discovery()
+        try:
+            snapshot = self._run_discovery()
+        except DiscoveryError as exc:
+            snapshot = self._fallback_discovery(str(exc))
         if self.cache_enabled:
             self._save_cache(snapshot)
         return snapshot

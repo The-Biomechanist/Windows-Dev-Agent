@@ -65,20 +65,66 @@ def _decode_result_payload(response: Any) -> Optional[dict[str, Any]]:
     return None
 
 
+def _short_tool_name(payload: dict[str, Any]) -> str:
+    return str(payload.get("tool_name", "")).rsplit("__", 1)[-1]
+
+
+def _may_execute_external_process(payload: dict[str, Any], tool_input: dict[str, Any]) -> bool:
+    """Return whether this call could have started an external process.
+
+    This is used only when the hook lifecycle failed before a result payload could
+    establish what actually happened. It must therefore be conservative.
+    """
+    tool_name = _short_tool_name(payload)
+    if tool_name in {"capability_run", "package_install", "sandbox_run"}:
+        return bool(tool_input.get("execute", False))
+    if tool_name in {"env_inspect", "tool_discover", "package_search"}:
+        return True
+    if tool_name == "ecosystem_scan":
+        return bool(tool_input.get("include_host", False))
+    return False
+
+
 def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str]]:
-    tool_input = payload.get("tool_input") or {}
-    if not isinstance(tool_input, dict) or "execute" not in tool_input:
-        return "not_applicable", None
-    if not bool(tool_input.get("execute", False)):
-        return "not_executed", "planned"
+    """Derive only what the returned tool evidence establishes.
+
+    Plan-first tools use their explicit ``execute`` flag. Other tools may still
+    launch external processes (for example ``package_search``), so a concrete
+    result status must be considered before declaring execution inapplicable.
+    A timeout after an executing call starts leaves the requested effect unknown:
+    the direct process failed to finish, but partial or child-process mutation may
+    already have occurred. Likewise, a hook-level tool failure without a result is
+    not evidence that an external action failed after starting; its effect remains
+    unknown when the call could have launched a process.
+    """
+    raw_tool_input = payload.get("tool_input") or {}
+    tool_input = raw_tool_input if isinstance(raw_tool_input, dict) else {}
+    has_execute = "execute" in tool_input
+    requested_execute = bool(tool_input.get("execute", False))
 
     hook_event = str(payload.get("hook_event_name", ""))
     result = _decode_result_payload(payload.get("tool_response"))
     status = str(result.get("status")) if isinstance(result, dict) and result.get("status") is not None else None
-    if hook_event == "PostToolUseFailure":
-        return "failed", status
+
+    if has_execute and not requested_execute:
+        return "not_executed", status or "planned"
+
     if result is None:
-        return "unknown", None
+        if hook_event == "PostToolUseFailure":
+            return ("unknown", None) if _may_execute_external_process(payload, tool_input) else ("not_applicable", None)
+        if has_execute and requested_execute:
+            return "unknown", None
+        if _may_execute_external_process(payload, tool_input):
+            return "unknown", None
+        return "not_applicable", None
+
+    if (
+        has_execute
+        and requested_execute
+        and result.get("execution_started") is True
+        and result.get("timed_out") is True
+    ):
+        return "unknown", status
 
     if status == "completed":
         succeeded = result.get("succeeded")
@@ -104,7 +150,10 @@ def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str
         "configuration_error",
     }:
         return "not_executed", status
-    return "unknown", status
+
+    if has_execute and requested_execute:
+        return "unknown", status
+    return "not_applicable", status
 
 
 def event_from_hook(payload: dict[str, Any]) -> dict[str, Any]:

@@ -32,7 +32,7 @@ PROJECT_ARG_BY_TOOL = {
 }
 
 CODEX_INSTRUCTIONS = (
-    "Windows Dev Agent Codex adapter. Pass the current Codex project directory "
+    "Windows Dev Agent Codex adapter. Pass the absolute current Codex project directory "
     "explicitly to project-scoped tools; never use the installed plugin cache as "
     "the project. Codex owns execution approval through MCP/shell policy. Bundled "
     "hook behavior is additional and is active only after the user trusts the "
@@ -53,7 +53,7 @@ def _codex_tools() -> list[dict[str, Any]]:
             project_arg,
             {
                 "type": "string",
-                "description": "Current Codex session/project directory; never the installed plugin cache.",
+                "description": "Absolute current Codex session/project directory; never the installed plugin cache.",
             },
         )
         required = list(schema.get("required", []))
@@ -70,7 +70,10 @@ def _resolve_project(value: Any) -> tuple[Optional[Path], Optional[str]]:
     raw = str(value or "").strip()
     if not raw:
         return None, "Current Codex project directory is required for this tool"
-    path = Path(raw).expanduser().resolve()
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        return None, "Current Codex project directory must be an absolute path"
+    path = path.resolve()
     if not path.is_dir():
         return None, f"Not a directory: {path}"
     return path, None

@@ -2,7 +2,7 @@
 
 Windows-native developer orchestration for **Claude Code and Codex**, built around one shared runtime and six shared procedural skills.
 
-Version **0.4.2** preserves the 0.4.1 runtime-integrity work and tightens the remaining discrimination/boundary seams: workflow routing requires discriminating capability identity/tag evidence instead of description-only or generic-word overlap, Sandbox staging rejects reparse parents and fails closed when reparse metadata cannot be established, and retained audit queries tolerate a segment disappearing between enumeration and read.
+Version **0.4.3** builds on 0.4.2 and closes host/runtime authority and outcome seams: Claude project-scoped tools are contained to the host-supplied project root, Codex plan shortcuts require authoritative session scope, Codex's MCP timeout covers the runtime execution ceiling, discovery failures remain canonical degraded snapshots, external-process audit outcomes preserve uncertainty, and WinGet installs are noninteractive and bound to the reviewed source.
 
 ## Architecture
 
@@ -63,11 +63,13 @@ claude --plugin-dir .
 - `${CLAUDE_PLUGIN_DATA}` — persistent cache/audit data;
 - `${CLAUDE_PROJECT_DIR}` — active project boundary.
 
+Project-scoped Claude MCP calls are normalized to that host-supplied project root or one of its descendants. Relative project paths are interpreted under `${CLAUDE_PROJECT_DIR}`; an arbitrary sibling/outside directory is rejected.
+
 ### Codex / ChatGPT desktop
 
 Canonical `main` carries `.codex-plugin/plugin.json` plus the release index at `.agents/plugins/marketplace.json`. Each published marketplace entry is pinned to an immutable Git commit rather than treating a moving `main` branch as the identity of a fixed version. The immutable plugin payload itself does not depend on carrying its own marketplace index.
 
-Codex installs plugin code into its cache, so project-scoped MCP tools require the current project directory explicitly. Runtime cache/audit state converges on `${CODEX_HOME:-~/.codex}/plugins/data/windows-dev-agent` rather than the installed plugin tree.
+Codex installs plugin code into its cache, so project-scoped MCP tools require the **absolute** current project directory explicitly. Runtime cache/audit state converges on `${CODEX_HOME:-~/.codex}/plugins/data/windows-dev-agent` rather than the installed plugin tree.
 
 Bundled Codex hooks are an **optional trusted layer**. Codex does not automatically trust newly installed/changed plugin hooks; until the user reviews and trusts them, native Codex MCP/shell approval policy remains the operative boundary. Mutation-capable WDA MCP tools remain `prompt`-gated regardless.
 
@@ -115,13 +117,13 @@ Project-local ecosystem/MCP inspection is classified separately from broader hos
 
 ### Codex
 
-Codex uses native MCP approval modes. Always-bounded non-filesystem reads can be `approve`; mutation-capable and filesystem-inventory tools remain `prompt`.
+Codex uses native MCP approval modes. Always-bounded non-filesystem reads can be `approve`; mutation-capable and filesystem-inventory tools remain `prompt`. The server-level MCP timeout is set above the runtime's 600-second execution ceiling so Codex does not terminate a legitimate long-running call before the runtime's own bound.
 
-When Codex plugin hooks are trusted, `PermissionRequest` removes needless prompts only for the three plan-first MCP tools when `execute: false`. Executing calls receive no WDA allow decision and continue to normal Codex approval.
+When Codex plugin hooks are trusted, `PermissionRequest` removes needless prompts only where the hook event itself proves the safe scope. `package_install(execute:false)` may be allowed as a non-executing plan. `capability_run(execute:false)` and `workflow_plan` may be allowed only when their absolute project path resolves inside the authoritative session `cwd`. `sandbox_run` planning remains on native approval because planning can enumerate payload paths. Executing calls receive no WDA allow decision and continue to normal Codex approval.
 
-`ecosystem_scan` and `mcp_audit` remain on native Codex approval even for project-only requests. Their caller-supplied `cwd` is required, but the plugin cannot independently prove that an arbitrary supplied directory is the active Codex project, so it does not auto-approve those reads.
+`ecosystem_scan` and `mcp_audit` remain on native Codex approval even for project-only requests. Their caller-supplied `cwd` is required, but the plugin does not auto-approve those filesystem reads.
 
-`PreToolUse` may deny a known-forbidden action but never emulates Claude's `ask` result.
+`PreToolUse` may deny a known-forbidden action but otherwise defers prompting to native Codex policy.
 
 ## Environment evidence
 
@@ -131,7 +133,7 @@ Availability fields are tri-state:
 - `false` — observed absent/disabled;
 - `null` — the probe did not establish the fact.
 
-The shipped PowerShell producer uses live-image optional-feature queries (`Get-WindowsOptionalFeature -Online`). Probe failures are recorded in `snapshot.errors` and make the snapshot degraded rather than silently becoming `false`. Windows Sandbox is queried using its canonical `Containers-DisposableClientVM` optional-feature identity.
+The shipped PowerShell producer uses live-image optional-feature queries (`Get-WindowsOptionalFeature -Online`). Probe failures are recorded in `snapshot.errors` and make the snapshot degraded rather than silently becoming `false`. Windows Sandbox is queried using its canonical `Containers-DisposableClientVM` optional-feature identity. If the native discovery process times out or otherwise cannot produce a parsed snapshot, `env_inspect` still returns the same canonical snapshot schema with degraded/unknown state instead of switching to an ad-hoc failure shape.
 
 The cache stores the same canonical representation returned to consumers; it is not a second serialization format. Cache TTL is five minutes, and package-install execution invalidates the cached snapshot even on a failed installer because partial mutation is possible.
 
@@ -141,7 +143,7 @@ Discovery intentionally does **not** persist username/domain, Git user identity,
 
 `package_search` is the package-identity producer. It is non-mutating by intent, but it executes the selected package manager and may contact its configured source, so the active host remains authoritative for the call. A package mutation should use an exact ID from the user/authoritative project state or resolve one through search before `package_install`.
 
-`package_install(execute:false)` returns the concrete argv for review. `execute:true` requests that exact mutation under the active host permission policy. Installer exit is not treated as proof that the requested task now works; verify executable/version/task state afterward.
+`package_install(execute:false)` returns the concrete argv for review. `execute:true` requests that exact mutation under the active host permission policy. WinGet execution is explicitly bound to the `winget` source and uses `--disable-interactivity` because MCP subprocess stdin is closed; package/source agreement flags are part of the reviewed argv. Installer exit is not treated as proof that the requested task now works; verify executable/version/task state afterward.
 
 ## Workflow routing
 
@@ -155,7 +157,7 @@ Discovery intentionally does **not** persist username/domain, Git user identity,
 - `project_reproducibility` → configured project Dev Container;
 - `untrusted_windows` → Windows Sandbox.
 
-WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by default. Dev Container execution uses the project configuration and `sh -lc`.
+WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by default. WSL accepts an absolute Windows path for `--cd`, so no guessed `/mnt/<drive>` translation is required. Dev Container execution uses the project configuration and `sh -lc`.
 
 ### Windows Sandbox payloads
 
@@ -177,7 +179,7 @@ Planning does not materialize the bundle. An executing Sandbox call returns `lau
 
 `mcp_audit` likewise starts from the project boundary. User-level MCP configuration and arbitrary `config_path` reads are explicit broader requests.
 
-Returned MCP summaries expose only structural metadata: server name, validity, transport kind, argument count, and whether command/URL/environment fields are present. Raw command strings, URLs, argument values, and environment values are not returned. JSON config reads are capped at 2 MiB per file. On Codex, all filesystem inventory reads remain on native approval because caller-supplied project identity cannot be independently authenticated by the plugin.
+Returned MCP summaries expose only structural metadata: server name, validity, transport kind, argument count, and whether command/URL/environment fields are present. Raw command strings, URLs, argument values, and environment values are not returned. JSON config reads are capped at 2 MiB per file. On Codex, filesystem inventory reads remain on native approval even when the supplied path is project-local.
 
 ## Audit state and retention
 
@@ -187,9 +189,11 @@ For execution-capable calls, the audit representation distinguishes:
 
 - `succeeded` — result establishes successful execution;
 - `failed` — result establishes failed execution;
-- `unknown` — execution/launch occurred but the available observation does not establish outcome;
-- `not_executed` — plan/block/unavailable/invalid input prevented execution;
+- `unknown` — execution may have started or occurred, but the available observation does not establish the effect;
+- `not_executed` — plan/block/unavailable/invalid input or a pre-launch failure prevented execution;
 - `not_applicable` — the lifecycle event has no execution outcome to classify, including permission/control events.
+
+Hook lifecycle and execution outcome are deliberately separate. A `PostToolUseFailure` without a result does not prove that a potentially external action failed after starting; where the call could have launched a process, the execution/effect state remains `unknown`. Started calls that time out likewise remain `unknown` because partial or child-process mutation may already have occurred.
 
 Codex PostToolUse may inspect the WDA MCP result **in memory** to derive that small status, then discards the raw response. A Windows Sandbox launch therefore remains `unknown`, never “zero failures.”
 
@@ -211,7 +215,7 @@ GitHub Actions runs on `windows-latest` across Python **3.9** and **3.13** and c
 4. exact MCP initialization/version/tool surfaces for Claude and Codex;
 5. when the canonical release index is present, that its immutable SHA resolves to a byte-identical published payload outside the marketplace index itself.
 
-The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness, routing discrimination, Sandbox payload staging/path/resource/reparse containment, WSL project binding, audit outcome uncertainty/retention, MCP summary minimization, host adapter wiring, and MCP transport isolation.
+The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness/source binding, routing discrimination, Sandbox payload staging/path/resource/reparse containment, WSL project binding, audit outcome uncertainty/retention, MCP summary minimization, host adapter wiring, and MCP transport isolation.
 
 For local development:
 
