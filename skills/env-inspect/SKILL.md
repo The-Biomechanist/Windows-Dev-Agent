@@ -12,7 +12,8 @@ description: Inspect Windows host, runtime, toolchain, package-manager, and isol
    - discovered but unhealthy/misconfigured;
    - not established by the current snapshot.
 4. Use `tool_discover` for a focused executable/version check when a full snapshot is unnecessary.
-5. Use `ecosystem_scan` for MCP configs, VS Code extensions, project agent config, or Claude plugin inventory. Those are not silently part of `env_inspect`.
-6. Suggest a repair only when the observed state blocks or materially degrades the requested task.
+5. Treat cached environment state as time-bound. After an install, optional-feature change, PATH/toolchain mutation, or other action that can invalidate the field you are about to consume, prefer the narrow fresh probe; if a full snapshot is required, call `env_inspect` with `force_refresh: true`.
+6. Use `ecosystem_scan` for MCP configs, VS Code extensions, project agent config, or Claude plugin inventory. Those are not silently part of `env_inspect`.
+7. Suggest a repair only when the observed state blocks or materially degrades the requested task.
 
-For package installation, route to the `package-install` skill / `package_install` MCP tool rather than emitting an unreviewed install command as if it had already been authorized.
+For package installation, route to the `package-install` skill and `package_search` / `package_install` MCP tools rather than emitting an unreviewed install command as if it had already been authorized.
