@@ -31,9 +31,6 @@ READ_ONLY_PATTERNS = [
     re.compile(r"^\s*(python|py|node|npm|git|gh|dotnet|cargo|rustc|go|java|winget|choco|scoop)\s+--?version\b", re.I),
 ]
 
-# These commands are commonly reversible, but they can execute project-owned
-# code or build hooks. They therefore keep their semantic class while returning
-# to Claude Code's ordinary human permission path instead of being auto-allowed.
 REVERSIBLE_PATTERNS = [
     re.compile(r"^\s*(pytest|ruff\b|pylint\b|eslint\b|dprint\s+check\b)", re.I),
     re.compile(r"^\s*(cargo|go|dotnet)\s+test\b", re.I),
@@ -54,10 +51,14 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\\\Windows\\\\System32)", re.I),
 ]
 
-# A command that chains/pipes multiple operations is not eligible for the
-# narrow prefix allow-list. The gate does not attempt to prove every child
-# command read-only with regexes; it asks instead.
 COMPOUND_COMMAND = re.compile(r"(;|\r|\n|&&|\|\||\|)")
+
+# Claude Code scopes MCP tools from a plugin-bundled server. Keep the bare
+# server prefix as well for direct/local MCP execution and tests.
+MCP_PREFIXES = (
+    "mcp__windows-dev-agent__",
+    "mcp__plugin_windows-dev-agent_windows-dev-agent__",
+)
 
 
 def classify_shell(command: str) -> str:
@@ -93,23 +94,26 @@ def _capability_safety(capability_id: str, extra_args: Any = None) -> str:
         return "approval-required"
     if capability.forbidden:
         return "forbidden"
-
-    # Appended arguments change the effective action. Do not inherit an
-    # auto-allowable base classification across that semantic boundary.
     if isinstance(extra_args, list) and extra_args:
         return "approval-required"
     return capability.safety
+
+
+def _mcp_short_name(tool_name: str) -> Optional[str]:
+    for prefix in MCP_PREFIXES:
+        if tool_name.startswith(prefix):
+            return tool_name[len(prefix):]
+    return None
 
 
 def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
     if tool_name in {"Bash", "PowerShell"}:
         return classify_shell(str(tool_input.get("command", "")))
 
-    prefix = "mcp__windows-dev-agent__"
-    if not tool_name.startswith(prefix):
+    short_name = _mcp_short_name(tool_name)
+    if short_name is None:
         return "approval-required"
 
-    short_name = tool_name[len(prefix):]
     if short_name in {
         "env_inspect",
         "tool_discover",
