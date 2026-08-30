@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 
-from src import codex_server
+from src import __version__, codex_server
+from src.mcp import server as common
 from src.observability import codex_trace
-from src.runtime_paths import resolve_data_dir
+from src.runtime_paths import resolve_codex_data_dir
 from src.safety import codex_gate, codex_permission
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,7 +26,7 @@ def run(coro):
 def test_codex_manifest_points_to_shared_root_components():
     manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "windows-dev-agent"
-    assert manifest["version"] == "0.3.0"
+    assert manifest["version"] == __version__ == "0.3.0"
     assert manifest["skills"] == "./skills/"
     assert manifest["mcpServers"] == "./.mcp.codex.json"
     assert manifest["hooks"] == "./hooks/codex-hooks.json"
@@ -116,6 +118,22 @@ def test_codex_rejects_project_scoped_call_without_current_project():
     assert "project directory" in payload["error"]
 
 
+def test_codex_runtime_binding_does_not_leak_into_shared_claude_server(monkeypatch, tmp_path: Path):
+    previous = (common.DATA_DIR, common.LOG_FILE, common.ENVIRONMENT_CACHE_FILE)
+    monkeypatch.delenv("WINDOWS_DEV_AGENT_DATA_DIR", raising=False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    project = tmp_path / "project"
+    project.mkdir()
+    expected = resolve_codex_data_dir()
+
+    with codex_server._runtime_binding(project):
+        assert common.DATA_DIR == expected
+        assert common.LOG_FILE == expected / "agent.log"
+        assert os.environ["WINDOWS_DEV_AGENT_PROJECT_DIR"] == str(project)
+
+    assert (common.DATA_DIR, common.LOG_FILE, common.ENVIRONMENT_CACHE_FILE) == previous
+
+
 def test_codex_initialize_explains_project_and_permission_boundaries():
     response = run(
         codex_server.handle_request(
@@ -125,7 +143,7 @@ def test_codex_initialize_explains_project_and_permission_boundaries():
     instructions = response["result"]["instructions"]
     assert "project directory" in instructions
     assert "approval" in instructions
-    assert response["result"]["serverInfo"]["version"] == "0.3.0"
+    assert response["result"]["serverInfo"]["version"] == __version__
 
 
 def test_codex_ecosystem_response_adds_host_inventory(tmp_path: Path):
@@ -138,10 +156,7 @@ def test_codex_ecosystem_response_adds_host_inventory(tmp_path: Path):
                 {
                     "type": "text",
                     "text": json.dumps(
-                        {
-                            "status": "ok",
-                            "inventory": {"agent_configs": []},
-                        }
+                        {"status": "ok", "inventory": {"agent_configs": []}}
                     ),
                 }
             ]
@@ -156,20 +171,15 @@ def test_codex_ecosystem_response_adds_host_inventory(tmp_path: Path):
 
 def test_codex_gate_denies_forbidden_but_never_emulates_ask(monkeypatch):
     monkeypatch.setattr(codex_gate, "append_event", lambda *_args, **_kwargs: None)
-
-    read_only = codex_gate.evaluate_hook_event(
+    assert codex_gate.evaluate_hook_event(
         {"tool_name": "Bash", "tool_input": {"command": "git status --short"}}
-    )
-    assert read_only is None
-
-    mutation = codex_gate.evaluate_hook_event(
+    ) is None
+    assert codex_gate.evaluate_hook_event(
         {
             "tool_name": CODEX_PREFIX + "package_install",
             "tool_input": {"package_id": "Python.Python.3.12", "execute": True},
         }
-    )
-    assert mutation is None
-
+    ) is None
     forbidden = codex_gate.evaluate_hook_event(
         {"tool_name": "Bash", "tool_input": {"command": "format C:"}}
     )
@@ -179,7 +189,6 @@ def test_codex_gate_denies_forbidden_but_never_emulates_ask(monkeypatch):
 def test_codex_permission_request_allows_plan_only_and_defers_execution(monkeypatch):
     monkeypatch.setattr(codex_permission, "append_event", lambda *_args, **_kwargs: None)
     tool_name = CODEX_PREFIX + "package_install"
-
     planned = codex_permission.evaluate_permission_request(
         {
             "tool_name": tool_name,
@@ -188,17 +197,15 @@ def test_codex_permission_request_allows_plan_only_and_defers_execution(monkeypa
     )
     assert planned["hookSpecificOutput"]["hookEventName"] == "PermissionRequest"
     assert planned["hookSpecificOutput"]["decision"]["behavior"] == "allow"
-
-    executing = codex_permission.evaluate_permission_request(
+    assert codex_permission.evaluate_permission_request(
         {
             "tool_name": tool_name,
             "tool_input": {"package_id": "Python.Python.3.12", "execute": True},
         }
-    )
-    assert executing is None
+    ) is None
 
 
-def test_codex_hook_config_uses_codex_contract_not_claude_ask():
+def test_codex_hook_config_uses_codex_contract_and_not_plugin_data_cross_process_assumption():
     raw = (ROOT / "hooks" / "codex-hooks.json").read_text(encoding="utf-8")
     config = json.loads(raw)
     assert "permissionDecision: ask" not in raw
@@ -216,7 +223,7 @@ def test_codex_hook_config_uses_codex_contract_not_claude_ask():
     ]
     assert commands
     assert all("${PLUGIN_ROOT}" in command for command in commands)
-    assert all("${PLUGIN_DATA}" in command for command in commands)
+    assert all("${PLUGIN_DATA}" not in command for command in commands)
 
 
 def test_codex_trace_does_not_infer_success_or_persist_payload():
@@ -235,9 +242,10 @@ def test_codex_trace_does_not_infer_success_or_persist_payload():
     assert "secret" not in json.dumps(event)
 
 
-def test_codex_stop_hook_emits_valid_json(tmp_path: Path):
-    data_dir = tmp_path / "plugin-data"
-    data_dir.mkdir()
+def test_codex_stop_hook_emits_valid_json_from_deterministic_codex_data_root(tmp_path: Path):
+    codex_home = tmp_path / "codex-home"
+    data_dir = codex_home / "plugins" / "data" / "windows-dev-agent"
+    data_dir.mkdir(parents=True)
     (data_dir / "agent.log").write_text(
         json.dumps(
             {
@@ -252,13 +260,17 @@ def test_codex_stop_hook_emits_valid_json(tmp_path: Path):
         encoding="utf-8",
     )
     script = ROOT / "src" / "observability" / "codex_audit_report.py"
+    env = dict(os.environ)
+    env.pop("WINDOWS_DEV_AGENT_DATA_DIR", None)
+    env["CODEX_HOME"] = str(codex_home)
     result = subprocess.run(
-        [sys.executable, str(script), "--data-dir", str(data_dir)],
+        [sys.executable, str(script)],
         input=json.dumps({"hook_event_name": "Stop", "session_id": "session-codex"}),
         capture_output=True,
         text=True,
         timeout=10,
         check=False,
+        env=env,
     )
     assert result.returncode == 0, result.stderr
     output = json.loads(result.stdout)
@@ -266,7 +278,8 @@ def test_codex_stop_hook_emits_valid_json(tmp_path: Path):
     assert "execution_failures=0" in output["systemMessage"]
 
 
-def test_codex_data_dir_prefers_plugin_data(monkeypatch, tmp_path: Path):
+def test_codex_data_dir_uses_codex_home_not_hook_only_plugin_data(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("WINDOWS_DEV_AGENT_DATA_DIR", raising=False)
-    monkeypatch.setenv("PLUGIN_DATA", str(tmp_path))
-    assert resolve_data_dir(host="codex") == tmp_path
+    monkeypatch.setenv("PLUGIN_DATA", str(tmp_path / "hook-only"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    assert resolve_codex_data_dir() == tmp_path / "codex-home" / "plugins" / "data" / "windows-dev-agent"
