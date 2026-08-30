@@ -554,7 +554,7 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
         "package_id": package_id,
         "source": source,
         "safety_class": "approval-required",
-        "executable": resolved,
+        "executable": resolved[0] if resolved else None,
         "argv": argv,
         "command": command_display(argv),
         "requires_host_approval": True,
