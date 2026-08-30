@@ -139,7 +139,7 @@ Discovery intentionally does **not** persist username/domain, Git user identity,
 
 ## Package setup
 
-`package_search` is the read-only package-identity producer. A package mutation should use an exact ID from the user/authoritative project state or resolve one through search before `package_install`.
+`package_search` is the package-identity producer. It is non-mutating by intent, but it executes the selected package manager and may contact its configured source, so the active host remains authoritative for the call. A package mutation should use an exact ID from the user/authoritative project state or resolve one through search before `package_install`.
 
 `package_install(execute:false)` returns the concrete argv for review. `execute:true` requests that exact mutation under the active host permission policy. Installer exit is not treated as proof that the requested task now works; verify executable/version/task state afterward.
 
