@@ -47,27 +47,27 @@ The bundled `.mcp.json` keeps three identities separate:
 
 ## Safety model
 
-Safety decisions are bound to the **effective requested action**, not only to a launcher name or capability label.
+The plugin safety hook is **tightening-only** over Claude Code's native permission system. It never returns `permissionDecision: allow`, so it never grants execution that Claude Code would otherwise have prompted for or denied.
 
-The plugin `PreToolUse` hook covers Bash, Claude Code's native PowerShell tool, and executing Windows Dev Agent MCP mutation calls. Claude Code scopes tools from plugin-bundled MCP servers internally; the hook supports both that installed-plugin identity and the bare server identity used by direct/local execution.
+The `PreToolUse` hook covers Bash, Claude Code's native PowerShell tool, and executing Windows Dev Agent MCP mutation calls. Claude Code scopes tools from plugin-bundled MCP servers internally; the hook supports both that installed-plugin identity and the bare server identity used by direct/local execution.
 
-| Class | Host decision |
+| Effective class | Plugin decision |
 | --- | --- |
-| `read-only` | `allow` only when the action is actually proven read-only |
-| `reversible` | `ask` — ordinary host permission remains in force because test/build/lint launchers can execute project-controlled code |
-| `approval-required` | `ask` |
-| `checkpoint` | `ask` |
+| `read-only` | no plugin decision — normal Claude Code permission flow remains authoritative |
+| `reversible` | no plugin decision — normal Claude Code permission flow remains authoritative |
+| `approval-required` | `ask` — force explicit host confirmation |
+| `checkpoint` | `ask` — force explicit host confirmation |
 | `forbidden` | `deny` |
 
 Additional guards:
 
-- unknown Bash or PowerShell commands ask rather than defaulting to allow;
-- compound shell commands cannot inherit a read-only prefix classification;
+- unknown Bash or PowerShell commands ask rather than defaulting to a weaker classification;
+- compound, redirected, substituted, or dynamically invoked shell commands cannot inherit a read-only prefix classification;
 - caller-supplied `extra_args` cannot inherit a base capability's weaker safety class and instead require approval;
 - package installation and sandbox launch are plan-first;
-- the MCP server separately blocks forbidden capabilities and requires executing approval-required requests to acknowledge the approval boundary.
+- the MCP server separately blocks forbidden capabilities and requires an acknowledgement before reversible or approval-required direct capability execution.
 
-The host hook is the human-confirmation authority when the server is used through this plugin. A model-provided `user_approved: true` value does not bypass that hook.
+The host permission system remains the human-confirmation authority. A model-provided `user_approved: true` value is not proof of permission and cannot bypass the plugin hook.
 
 ## Capability routing
 
@@ -83,9 +83,13 @@ The current catalog covers:
 
 Configured commands are argv arrays. Base safety describes the configured request; if a caller appends additional arguments, the effective request is upgraded to approval-required instead of assuming the base classification still applies.
 
+Child processes launched by the MCP runtime, capability runner, and environment discovery receive `DEVNULL` stdin rather than inheriting the MCP server's stdio transport. An unexpectedly interactive child therefore cannot consume future JSON-RPC requests as prompt input.
+
 ## Package identity and freshness
 
 A package mutation should not begin from a guessed ID. Use an exact ID supplied by the user or authoritative project/config state, or call `package_search` and resolve the matching candidate before `package_install`.
+
+WinGet search is noninteractive and does not auto-accept source agreements. If a source agreement prevents read-only discovery, that unresolved prerequisite is surfaced instead of being silently accepted by the search operation.
 
 Successful package installation invalidates the cached environment snapshot. More generally, when a host mutation can change the state a later step consumes, verify with the narrowest fresh probe or call `env_inspect(force_refresh=true)` rather than treating a pre-mutation snapshot as current evidence.
 
@@ -105,7 +109,7 @@ Hyper-V is not claimed as an implemented `sandbox_run` backend.
 
 The plugin persists only metadata its audit surfaces consume. It does **not** retain arbitrary command bodies, tool inputs, stdout/stderr, or unrelated tool responses.
 
-- `PreToolUse` records the safety class and permission decision with session/tool identity.
+- `PreToolUse` records safety classification and whether the plugin forced `ask`/`deny` or deferred to the host, with session/tool identity.
 - `PostToolUse` and `PostToolUseFailure` are scoped to Windows Dev Agent MCP operations and record minimal completion metadata.
 - the `Stop` hook reads its current `session_id` and reports only events from that session;
 - `logs_query` is explicitly a persistent-history surface and labels itself accordingly.
@@ -151,7 +155,7 @@ GitHub Actions on `windows-latest` checks:
 2. the pytest regression suite;
 3. MCP initialization and the exact expected tool surface.
 
-The regression suite is intended to discriminate the public contracts above: installed-plugin MCP naming, PowerShell/Bash permission routing, argument-dependent authority, package identity flow, cache freshness, isolation selection, audit ownership/session binding, and plan-versus-execute boundaries.
+The regression suite is intended to discriminate the public contracts above: installed-plugin MCP naming, PowerShell/Bash permission routing, argument-dependent authority, package identity flow, cache freshness, isolation selection, audit ownership/session binding, transport isolation, and plan-versus-execute boundaries.
 
 For local development:
 
