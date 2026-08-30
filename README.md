@@ -91,7 +91,7 @@ A package mutation should not begin from a guessed ID. Use an exact ID supplied 
 
 WinGet search is noninteractive and does not auto-accept source agreements. If a source agreement prevents read-only discovery, that unresolved prerequisite is surfaced instead of being silently accepted by the search operation.
 
-Successful package installation invalidates the cached environment snapshot. More generally, when a host mutation can change the state a later step consumes, verify with the narrowest fresh probe or call `env_inspect(force_refresh=true)` rather than treating a pre-mutation snapshot as current evidence.
+Any executed package-install attempt invalidates the cached environment snapshot because an installer can partially mutate host state even when it exits nonzero. More generally, when a host mutation can change the state a later step consumes, verify with the narrowest fresh probe or call `env_inspect(force_refresh=true)` rather than treating a pre-mutation snapshot as current evidence.
 
 ## Isolation
 
@@ -155,7 +155,7 @@ GitHub Actions on `windows-latest` checks:
 2. the pytest regression suite;
 3. MCP initialization and the exact expected tool surface.
 
-The regression suite is intended to discriminate the public contracts above: installed-plugin MCP naming, PowerShell/Bash permission routing, argument-dependent authority, package identity flow, cache freshness, isolation selection, audit ownership/session binding, transport isolation, and plan-versus-execute boundaries.
+The regression suite is intended to discriminate the public contracts above: installed-plugin MCP naming, PowerShell/Bash permission routing, argument-dependent authority, package identity flow, cache freshness including failed attempts, isolation selection, audit ownership/session binding, transport isolation, and plan-versus-execute boundaries.
 
 For local development:
 
