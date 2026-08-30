@@ -3,6 +3,7 @@
 When invoked by Claude Code's Stop hook, the current hook payload is read from
 stdin and the persistent log is filtered to the matching session_id. Direct
 invocation without a session id reports aggregate history and labels it as such.
+Permission denials are reported separately from tool execution failures.
 """
 
 from __future__ import annotations
@@ -47,12 +48,15 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
     event_types = Counter(str(event.get("event", "unknown")) for event in events)
     tools = Counter(str(event.get("tool_name", "unknown")) for event in events if event.get("tool_name"))
     failures = [event for event in events if event.get("success") is False]
+    denied = [event for event in events if event.get("permission_denied") is True]
     return {
         "total_events": len(events),
         "event_types": dict(event_types),
         "tools": dict(tools),
         "failures": len(failures),
+        "permission_denials": len(denied),
         "last_failure_tool": failures[-1].get("tool_name") if failures else None,
+        "last_denied_tool": denied[-1].get("tool_name") if denied else None,
     }
 
 
@@ -93,13 +97,19 @@ def main() -> int:
     title = "Session Audit" if session_id else "Persistent Audit History"
     print(f"\n=== Windows Dev Agent — {title} ===")
     print(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Events: {summary['total_events']} | Failures: {summary['failures']}")
+    print(
+        f"Events: {summary['total_events']} | "
+        f"Execution failures: {summary['failures']} | "
+        f"Permission denials: {summary['permission_denials']}"
+    )
     if summary["tools"]:
         print("Tools:")
         for name, count in sorted(summary["tools"].items()):
             print(f"  {name}: {count}")
     if summary["last_failure_tool"]:
         print(f"Last failed tool: {summary['last_failure_tool']}")
+    if summary["last_denied_tool"]:
+        print(f"Last denied request: {summary['last_denied_tool']}")
     print("=" * 43)
     return 0
 
