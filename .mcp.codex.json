@@ -1,0 +1,10 @@
+{
+  "windows-dev-agent": {
+    "command": "python",
+    "args": ["-m", "src.mcp.server"],
+    "cwd": ".",
+    "env": {
+      "WINDOWS_DEV_AGENT_HOST": "codex"
+    }
+  }
+}
