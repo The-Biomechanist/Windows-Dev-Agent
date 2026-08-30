@@ -1,461 +1,181 @@
-"""
-Tests for environment discovery module.
-
-Tests are mocked to avoid PowerShell/Windows-specific dependencies.
-"""
+"""Contract tests for truth-preserving Windows discovery and serialization."""
 
 import json
-import pytest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-import sys
+import subprocess
+from unittest.mock import MagicMock, patch
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import pytest
 
-from src.discovery.discovery import EnvironmentDiscovery, DiscoveryError
+from src.discovery.discovery import DiscoveryError, EnvironmentDiscovery
 from src.models.environment import (
+    DevDrive,
+    DevelopmentTools,
+    EditorAvailability,
     EnvironmentSnapshot,
+    GitConfig,
+    RuntimeInfo,
+    Runtimes,
     SystemInfo,
     VirtualizationInfo,
-    DevelopmentTools,
-    Runtimes,
-    RuntimeInfo,
-    GitConfig,
-    EditorAvailability,
-    PowerShellModules,
-    DevDrive,
+    availability_state,
 )
 
 
-# Sample discovery result (as would come from PowerShell)
 MOCK_DISCOVERY_OUTPUT = {
     "timestamp": datetime.now().isoformat(),
-    "success": True,
-    "errors": [],
+    "success": False,
+    "errors": ["Optional feature 'Microsoft-Hyper-V' was not established"],
     "system": {
         "os_name": "Microsoft Windows 11 Pro",
         "os_version": "10.0.22631",
         "os_build": "22631",
         "architecture": "64-bit",
-        "install_date": "2024-01-01T00:00:00Z",
-        "system_root": "C:\\Windows",
-        "computer_name": "TEST-COMPUTER",
-        "username": "testuser",
-        "domain": "TESTDOMAIN",
         "processor_count": 8,
-        "processor_name": "Intel(R) Core(TM) i7-1234K CPU @ 0.00GHz",
+        "processor_name": "Test CPU",
         "total_physical_memory_gb": 32.0,
-        "locale": "en-US",
-        "timezone": "UTC",
     },
     "virtualization": {
-        "hyper_v_available": True,
+        "hyper_v_available": None,
+        "hyper_v_state": "unknown",
         "wsl_installed": True,
-        "wsl_version": "WSL 2",
-        "wsl_distros": ["Ubuntu-22.04", "Debian"],
-        "windows_sandbox_available": True,
-        "dev_drives": [
-            {
-                "drive_letter": "D",
-                "label": "DevDrive",
-                "size_gb": 500.0,
-                "free_space_gb": 400.0,
-            }
-        ],
+        "wsl_version": "WSL version: 2.5.9.0",
+        "wsl_distros": ["Ubuntu"],
+        "windows_sandbox_available": False,
+        "windows_sandbox_state": "Disabled",
+        "dev_drives": [{"drive_letter": "D", "label": "DevDrive", "size_gb": 100.0, "free_space_gb": 80.0}],
     },
     "development_tools": {
         "winget_available": True,
-        "chocolatey_available": True,
-        "scoop_available": True,
+        "chocolatey_available": False,
+        "scoop_available": None,
         "git_available": True,
-        "docker_available": True,
+        "docker_available": False,
         "vscode_available": True,
-        "visual_studio_available": True,
+        "visual_studio_available": False,
     },
     "runtimes": {
-        "python": {
-            "available": True,
-            "version": "3.11.0",
-        },
-        "node": {
-            "available": True,
-            "version": "20.5.0",
-        },
-        "rust": {
-            "available": True,
-            "version": "1.71.0",
-        },
-        "golang": {
-            "available": True,
-            "version": "1.21.0",
-        },
-        "dotnet": {
-            "available": True,
-            "versions": ["7.0.0", "8.0.0"],
-        },
+        "python": {"available": True, "version": "Python 3.11.9", "versions": []},
+        "node": {"available": False, "version": None, "versions": []},
+        "rust": {"available": None, "version": None, "versions": []},
+        "golang": {"available": False, "version": None, "versions": []},
+        "dotnet": {"available": True, "version": None, "versions": ["8.0.100"]},
     },
-    "git": {
-        "available": True,
-        "version": "2.42.0",
-        "user_name": "Test User",
-        "user_email": "test@example.com",
-    },
+    "git": {"available": True, "version": "git version 2.45.0"},
     "editors": {
         "visual_studio_code": True,
-        "visual_studio": True,
-        "jetbrains_rider": False,
-        "jetbrains_pycharm": True,
+        "visual_studio": False,
+        "jetbrains_rider": None,
+        "jetbrains_pycharm": False,
         "jetbrains_clion": False,
-    },
-    "powershell_modules": {
-        "count": 42,
-        "modules": ["Az.Accounts", "Az.Compute", "Pester"],
     },
 }
 
 
-class TestEnvironmentModels:
-    """Test environment model classes."""
+def test_availability_state_is_tri_state():
+    assert availability_state(True) == "available"
+    assert availability_state(False) == "missing"
+    assert availability_state(None) == "unknown"
 
-    def test_system_info_creation(self):
-        """Test SystemInfo dataclass creation."""
-        sys_info = SystemInfo(
-            os_name="Windows 11",
-            os_version="10.0.22631",
-            os_build="22631",
-            architecture="64-bit",
-            computer_name="TEST-PC",
-        )
-        assert sys_info.os_name == "Windows 11"
-        assert sys_info.computer_name == "TEST-PC"
 
-    def test_system_info_windows_11_detection(self):
-        """Test Windows 11 detection."""
-        sys_info = SystemInfo(
-            os_name="Microsoft Windows 11 Pro",
-            os_version="10.0.22631",
-            os_build="22631",
-            architecture="64-bit",
-        )
-        assert sys_info.is_windows_11()
+def test_unknown_optional_feature_is_not_missing():
+    virt = VirtualizationInfo(hyper_v_available=None, windows_sandbox_available=False)
+    assert virt.has_hyper_v() is False
+    assert availability_state(virt.hyper_v_available) == "unknown"
+    assert availability_state(virt.windows_sandbox_available) == "missing"
 
-    def test_system_info_windows_10_detection(self):
-        """Test Windows 10 detection."""
-        sys_info = SystemInfo(
-            os_name="Microsoft Windows 10 Pro",
-            os_version="10.0.19045",
-            os_build="19045",
-            architecture="64-bit",
-        )
-        assert sys_info.is_windows_10()
 
-    def test_virtualization_info_methods(self):
-        """Test VirtualizationInfo helper methods."""
-        virt = VirtualizationInfo(
-            hyper_v_available=True,
+def test_dev_drive_is_not_reported_as_isolation_backend():
+    virt = VirtualizationInfo(dev_drives=[DevDrive("D", "DevDrive", 100.0, 80.0)])
+    assert "dev-drive" not in virt.get_available_isolation_options()
+
+
+def test_windows_version_detection_handles_unknown_build():
+    assert SystemInfo(os_name="Unknown", os_build="").is_windows_11() is False
+
+
+def test_snapshot_roundtrip_is_lossless_for_canonical_fields():
+    snapshot = EnvironmentSnapshot(
+        timestamp=datetime.now(),
+        success=False,
+        errors=["probe unknown"],
+        system=SystemInfo(os_name="Windows 11", os_build="22631"),
+        virtualization=VirtualizationInfo(
+            hyper_v_available=None,
+            hyper_v_state="unknown",
             wsl_installed=True,
-            wsl_version="WSL 2",
-            windows_sandbox_available=True,
-        )
-        assert virt.has_hyper_v()
-        assert virt.has_wsl()
-        assert virt.has_sandbox()
-
-    def test_virtualization_info_isolation_options(self):
-        """Test isolation options enumeration."""
-        virt = VirtualizationInfo(
-            hyper_v_available=True,
-            wsl_installed=True,
-            wsl_version="WSL 2",  # WSL 2 is required
-            windows_sandbox_available=True,
-        )
-        options = virt.get_available_isolation_options()
-        assert "hyper-v" in options
-        assert "wsl" in options
-        assert "windows-sandbox" in options
-
-    def test_dev_drive_usage_percent(self):
-        """Test Dev Drive usage percentage calculation."""
-        drive = DevDrive(
-            drive_letter="D",
-            label="DevDrive",
-            size_gb=100.0,
-            free_space_gb=80.0,
-        )
-        assert drive.usage_percent == 20.0
-
-    def test_development_tools_package_managers(self):
-        """Test package manager enumeration."""
-        tools = DevelopmentTools(
-            winget_available=True,
-            chocolatey_available=False,
-            scoop_available=True,
-        )
-        managers = tools.get_available_package_managers()
-        assert "winget" in managers
-        assert "scoop" in managers
-        assert "chocolatey" not in managers
-
-    def test_runtimes_availability(self):
-        """Test runtime availability enumeration."""
-        runtimes = Runtimes(
-            python=RuntimeInfo(available=True, version="3.11.0"),
-            node=RuntimeInfo(available=True, version="20.5.0"),
-            rust=RuntimeInfo(available=False),
-            golang=RuntimeInfo(available=True, version="1.21.0"),
-        )
-        available = runtimes.get_available_runtimes()
-        assert "python" in available
-        assert "node" in available
-        assert "golang" in available
-        assert "rust" not in available
-
-    def test_git_config_is_configured(self):
-        """Test git configuration check."""
-        git_ok = GitConfig(
-            available=True,
-            version="2.42.0",
-            user_name="Test User",
-            user_email="test@example.com",
-        )
-        assert git_ok.is_configured()
-
-        git_incomplete = GitConfig(
-            available=True,
-            version="2.42.0",
-            user_name="Test User",
-            user_email=None,
-        )
-        assert not git_incomplete.is_configured()
-
-    def test_editor_availability(self):
-        """Test editor enumeration."""
-        editors = EditorAvailability(
-            visual_studio_code=True,
-            visual_studio=True,
-            jetbrains_pycharm=True,
-        )
-        available = editors.get_available_editors()
-        assert "vscode" in available
-        assert "visual-studio" in available
-        assert "pycharm" in available
-
-    def test_environment_snapshot_serialization(self):
-        """Test EnvironmentSnapshot to_dict and from_dict."""
-        snapshot = EnvironmentSnapshot(
-            timestamp=datetime.now(),
-            success=True,
-            system=SystemInfo(
-                os_name="Windows 11",
-                os_version="10.0.22631",
-                os_build="22631",
-                architecture="64-bit",
-            ),
-        )
-        dict_repr = snapshot.to_dict()
-        assert dict_repr["success"] is True
-        assert "os_name" in dict_repr["system"]
-
-    def test_environment_snapshot_json_roundtrip(self):
-        """Test JSON serialization roundtrip."""
-        snapshot = EnvironmentSnapshot(
-            timestamp=datetime.now(),
-            success=True,
-            system=SystemInfo(
-                os_name="Windows 11",
-                os_version="10.0.22631",
-                os_build="22631",
-                architecture="64-bit",
-            ),
-            git=GitConfig(
-                available=True,
-                version="2.42.0",
-                user_name="Test User",
-                user_email="test@example.com",
-            ),
-        )
-        json_str = snapshot.to_json()
-        snapshot2 = EnvironmentSnapshot.from_json(json_str)
-        assert snapshot2.success == snapshot.success
-        assert snapshot2.system.os_name == snapshot.system.os_name
-        assert snapshot2.git.available == snapshot.git.available
+            windows_sandbox_available=False,
+            windows_sandbox_state="Disabled",
+        ),
+        development_tools=DevelopmentTools(winget_available=True, scoop_available=None),
+        runtimes=Runtimes(python=RuntimeInfo(available=True, version="3.11")),
+        git=GitConfig(available=True, version="git version 2.45"),
+        editors=EditorAvailability(visual_studio_code=True, jetbrains_rider=None),
+    )
+    restored = EnvironmentSnapshot.from_json(snapshot.to_json())
+    assert restored.to_dict() == snapshot.to_dict()
+    assert restored.virtualization.hyper_v_available is None
+    assert restored.editors.visual_studio_code is True
+    assert restored.git.version == "git version 2.45"
 
 
-class TestEnvironmentDiscovery:
-    """Test environment discovery."""
-
-    @patch("subprocess.run")
-    def test_discovery_parse_valid_output(self, mock_run):
-        """Test discovery parsing valid PowerShell output."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout=json.dumps(MOCK_DISCOVERY_OUTPUT),
-            stderr="",
-        )
-
-        discovery = EnvironmentDiscovery(cache_enabled=False)
-        snapshot = discovery.discover()
-
-        assert snapshot.success is True
-        assert snapshot.system.os_name == "Microsoft Windows 11 Pro"
-        assert snapshot.system.processor_count == 8
-        assert snapshot.virtualization.hyper_v_available is True
-        assert snapshot.runtimes.python.available is True
-        assert snapshot.runtimes.python.version == "3.11.0"
-        assert snapshot.git.user_email == "test@example.com"
-
-    @patch("subprocess.run")
-    def test_discovery_caching(self, mock_run):
-        """Test that discovery results are cached."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout=json.dumps(MOCK_DISCOVERY_OUTPUT),
-            stderr="",
-        )
-
-        discovery = EnvironmentDiscovery(cache_enabled=True)
-
-        # First call should run discovery
-        snapshot1 = discovery.discover()
-        assert snapshot1.success is True
-
-        # Second call should use cache (without running again)
-        mock_run.reset_mock()
-        snapshot2 = discovery.discover()
-        assert snapshot2.success is True
-        # Mock should not have been called again
-        mock_run.assert_not_called()
-
-    @patch("src.discovery.discovery.EnvironmentDiscovery._load_cache", return_value=None)
-    @patch("subprocess.run")
-    def test_discovery_force_refresh(self, mock_run, mock_cache):
-        """Test forcing discovery refresh."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout=json.dumps(MOCK_DISCOVERY_OUTPUT),
-            stderr="",
-        )
-
-        discovery = EnvironmentDiscovery(cache_enabled=True)
-
-        # First call (disable cache loading in test)
-        snapshot1 = discovery.discover()
-        first_call_count = mock_run.call_count
-
-        # Force refresh should run again
-        mock_run.reset_mock()
-        snapshot2 = discovery.discover(force_refresh=True)
-        assert mock_run.called
-
-    @patch("subprocess.run")
-    def test_discovery_powershell_not_found(self, mock_run):
-        """Test fallback when PowerShell is not available."""
-        mock_run.side_effect = FileNotFoundError()
-
-        discovery = EnvironmentDiscovery(cache_enabled=False)
-        snapshot = discovery.discover()
-
-        # Should use fallback
-        assert snapshot.success is False
-        assert len(snapshot.errors) > 0
-
-    @patch("subprocess.run")
-    def test_discovery_invalid_json(self, mock_run):
-        """Test handling of invalid JSON output."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="invalid json output",
-            stderr="",
-        )
-
-        discovery = EnvironmentDiscovery(cache_enabled=False)
-        snapshot = discovery.discover()
-
-        # Should use fallback
-        assert snapshot.success is False
-
-    @patch("subprocess.run")
-    def test_discovery_timeout(self, mock_run):
-        """Test handling of discovery timeout."""
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired("cmd", 30)
-
-        discovery = EnvironmentDiscovery(cache_enabled=False)
-
-        with pytest.raises(DiscoveryError):
-            discovery.discover()
-
-    def test_discovery_snapshot_available_runtimes(self):
-        """Test querying available runtimes from snapshot."""
-        snapshot = EnvironmentSnapshot(
-            timestamp=datetime.now(),
-            success=True,
-            system=SystemInfo(
-                os_name="Windows 11",
-                os_version="10.0.22631",
-                os_build="22631",
-                architecture="64-bit",
-            ),
-            runtimes=Runtimes(
-                python=RuntimeInfo(available=True, version="3.11.0"),
-                node=RuntimeInfo(available=True, version="20.5.0"),
-                rust=RuntimeInfo(available=False),
-            ),
-        )
-
-        available = snapshot.runtimes.get_available_runtimes()
-        assert "python" in available
-        assert "node" in available
-        assert "rust" not in available
-
-    def test_discovery_snapshot_available_tools(self):
-        """Test querying available tools from snapshot."""
-        snapshot = EnvironmentSnapshot(
-            timestamp=datetime.now(),
-            success=True,
-            system=SystemInfo(
-                os_name="Windows 11",
-                os_version="10.0.22631",
-                os_build="22631",
-                architecture="64-bit",
-            ),
-            development_tools=DevelopmentTools(
-                winget_available=True,
-                git_available=True,
-                docker_available=False,
-            ),
-        )
-
-        assert snapshot.development_tools.winget_available is True
-        assert snapshot.development_tools.git_available is True
-        assert snapshot.development_tools.docker_available is False
+@patch("src.discovery.discovery.subprocess.run")
+def test_parse_valid_partial_output_preserves_unknown(mock_run, tmp_path: Path):
+    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(MOCK_DISCOVERY_OUTPUT), stderr="")
+    snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
+    assert snapshot.success is False
+    assert snapshot.virtualization.hyper_v_available is None
+    assert snapshot.virtualization.windows_sandbox_available is False
+    assert snapshot.development_tools.scoop_available is None
+    assert snapshot.git.version == "git version 2.45.0"
 
 
-class TestEnvironmentIntegration:
-    """Integration tests."""
-
-    @patch("subprocess.run")
-    def test_full_discovery_workflow(self, mock_run):
-        """Test complete discovery workflow."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout=json.dumps(MOCK_DISCOVERY_OUTPUT),
-            stderr="",
-        )
-
-        discovery = EnvironmentDiscovery(cache_enabled=False)
-        snapshot = discovery.discover()
-
-        # Verify all major components are populated
-        assert snapshot.timestamp is not None
-        assert snapshot.system.computer_name != ""
-        assert len(snapshot.virtualization.get_available_isolation_options()) > 0
-        assert len(snapshot.development_tools.get_available_package_managers()) > 0
-        assert len(snapshot.runtimes.get_available_runtimes()) > 0
-        assert snapshot.editors.get_available_editors() != []
+@patch("src.discovery.discovery.subprocess.run")
+def test_cache_uses_same_canonical_snapshot_schema(mock_run, tmp_path: Path):
+    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(MOCK_DISCOVERY_OUTPUT), stderr="")
+    discovery = EnvironmentDiscovery(cache_enabled=True, data_dir=tmp_path)
+    first = discovery.discover()
+    assert discovery.cache_file.is_file()
+    cached_json = json.loads(discovery.cache_file.read_text(encoding="utf-8"))
+    assert cached_json == first.to_dict()
+    mock_run.reset_mock()
+    second = discovery.discover()
+    mock_run.assert_not_called()
+    assert second.to_dict() == first.to_dict()
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+@patch("src.discovery.discovery.subprocess.run")
+def test_force_refresh_runs_discovery_again(mock_run, tmp_path: Path):
+    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(MOCK_DISCOVERY_OUTPUT), stderr="")
+    discovery = EnvironmentDiscovery(cache_enabled=True, data_dir=tmp_path)
+    discovery.discover()
+    mock_run.reset_mock()
+    discovery.discover(force_refresh=True)
+    assert mock_run.called
+
+
+@patch("src.discovery.discovery.subprocess.run")
+def test_nonzero_process_marks_parseable_snapshot_degraded(mock_run, tmp_path: Path):
+    good = dict(MOCK_DISCOVERY_OUTPUT)
+    good["success"] = True
+    good["errors"] = []
+    mock_run.return_value = MagicMock(returncode=5, stdout=json.dumps(good), stderr="probe process failed")
+    snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
+    assert snapshot.success is False
+    assert any("exited with code 5" in error for error in snapshot.errors)
+
+
+@patch("src.discovery.discovery.subprocess.run")
+def test_invalid_json_returns_degraded_fallback(mock_run, tmp_path: Path):
+    mock_run.return_value = MagicMock(returncode=1, stdout="not-json", stderr="bad")
+    snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
+    assert snapshot.success is False
+    assert snapshot.virtualization.windows_sandbox_available is None
+
+
+@patch("src.discovery.discovery.subprocess.run")
+def test_timeout_remains_hard_discovery_error(mock_run, tmp_path: Path):
+    mock_run.side_effect = subprocess.TimeoutExpired("powershell", 30)
+    with pytest.raises(DiscoveryError):
+        EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
