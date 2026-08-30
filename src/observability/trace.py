@@ -71,6 +71,9 @@ def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str
     Plan-first tools use their explicit ``execute`` flag. Other tools may still
     launch external processes (for example ``package_search``), so a concrete
     result status must be considered before declaring execution inapplicable.
+    A timeout after an executing call starts leaves the requested effect unknown:
+    the direct process failed to finish, but partial or child-process mutation may
+    already have occurred.
     """
     tool_input = payload.get("tool_input") or {}
     has_execute = isinstance(tool_input, dict) and "execute" in tool_input
@@ -86,6 +89,14 @@ def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str
         return "failed", status
     if result is None:
         return ("unknown", None) if has_execute and requested_execute else ("not_applicable", None)
+
+    if (
+        has_execute
+        and requested_execute
+        and result.get("execution_started") is True
+        and result.get("timed_out") is True
+    ):
+        return "unknown", status
 
     if status == "completed":
         succeeded = result.get("succeeded")
