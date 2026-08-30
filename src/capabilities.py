@@ -1,21 +1,22 @@
 """Small, executable capability registry for the Windows Dev Agent runtime.
 
-The repository previously had two competing capability representations: a rich
-schema/graph stack that was not connected to real tool commands, and a flat YAML
-file that the MCP server executed directly with ``shell=True``.  This module is
-the single runtime path: configuration is validated once, commands are stored as
-argument vectors, safety is explicit, and execution never goes through a shell.
+The capability catalog is stored in ``capabilities.yaml`` using the JSON-compatible
+subset of YAML. Parsing therefore uses only Python's standard library: an installed
+plugin does not depend on a separate ``pip install`` step before its MCP server can
+start.
+
+Commands are argument vectors, safety is explicit, and execution never goes
+through a shell.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import shutil
 import subprocess
 from typing import Any, Iterable, Mapping, Optional
-
-import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CAPABILITIES_FILE = ROOT / "capabilities.yaml"
@@ -23,7 +24,7 @@ VALID_SAFETY = {"read-only", "reversible", "approval-required", "forbidden"}
 
 
 class CapabilityConfigError(ValueError):
-    """Raised when ``capabilities.yaml`` is malformed."""
+    """Raised when the runtime capability catalog is malformed."""
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ def _argv(value: Any, *, field: str, allow_empty: bool = False) -> tuple[str, ..
     if value is None and allow_empty:
         return ()
     if not isinstance(value, list) or (not value and not allow_empty):
-        raise CapabilityConfigError(f"{field} must be a non-empty YAML list")
+        raise CapabilityConfigError(f"{field} must be a non-empty list")
     if not all(isinstance(item, str) and item for item in value):
         raise CapabilityConfigError(f"{field} entries must be non-empty strings")
     return tuple(value)
@@ -70,7 +71,7 @@ def _string_list(value: Any, *, field: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise CapabilityConfigError(f"{field} must be a YAML list of strings")
+        raise CapabilityConfigError(f"{field} must be a list of strings")
     return tuple(value)
 
 
@@ -80,16 +81,22 @@ def load_capabilities(path: Optional[Path] = None) -> dict[str, Capability]:
     if not path.exists():
         raise CapabilityConfigError(f"Capability file not found: {path}")
 
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CapabilityConfigError(
+            f"Capability file must use JSON-compatible YAML syntax: {exc}"
+        ) from exc
+
     if not isinstance(raw, Mapping):
-        raise CapabilityConfigError("capabilities.yaml must contain a mapping")
+        raise CapabilityConfigError("Capability catalog must contain an object mapping")
 
     capabilities: dict[str, Capability] = {}
     for cap_id, spec in raw.items():
         if not isinstance(cap_id, str) or not cap_id:
             raise CapabilityConfigError("Capability IDs must be non-empty strings")
         if not isinstance(spec, Mapping):
-            raise CapabilityConfigError(f"Capability {cap_id!r} must be a mapping")
+            raise CapabilityConfigError(f"Capability {cap_id!r} must be an object")
 
         description = spec.get("description", "")
         if not isinstance(description, str) or not description:
@@ -109,7 +116,7 @@ def load_capabilities(path: Optional[Path] = None) -> dict[str, Capability]:
         tools: list[CapabilityTool] = []
         for index, tool in enumerate(raw_tools):
             if not isinstance(tool, Mapping):
-                raise CapabilityConfigError(f"{cap_id}.tools[{index}] must be a mapping")
+                raise CapabilityConfigError(f"{cap_id}.tools[{index}] must be an object")
             name = tool.get("name")
             if not isinstance(name, str) or not name:
                 raise CapabilityConfigError(f"{cap_id}.tools[{index}].name is required")
@@ -171,8 +178,8 @@ def run_capability(
 ) -> dict[str, Any]:
     """Plan or execute a configured capability.
 
-    Execution is intentionally plan-first.  Approval-required capabilities need
-    both ``execute=True`` and ``user_approved=True``.  In Claude Code, the plugin
+    Execution is intentionally plan-first. Approval-required capabilities need
+    both ``execute=True`` and ``user_approved=True``. In Claude Code, the plugin
     PreToolUse hook independently returns ``permissionDecision: ask`` for that
     call, so a model-provided boolean cannot bypass the host prompt.
     """
