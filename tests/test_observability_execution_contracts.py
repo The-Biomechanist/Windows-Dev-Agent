@@ -54,14 +54,34 @@ def test_executing_timeout_preserves_unknown_effect_state():
     assert trace.derive_execution_outcome(payload) == ("unknown", "failed")
 
 
-def test_post_tool_failure_without_execute_flag_is_still_a_tool_failure():
+def test_hook_failure_does_not_invent_external_execution_failure():
     payload = _hook(
         "mcp__windows-dev-agent__package_search",
         {"query": "Python"},
         None,
         event="PostToolUseFailure",
     )
-    assert trace.derive_execution_outcome(payload)[0] == "failed"
+    assert trace.derive_execution_outcome(payload) == ("unknown", None)
+
+
+def test_hook_failure_does_not_invent_mutation_outcome():
+    payload = _hook(
+        "mcp__windows-dev-agent__package_install",
+        {"execute": True, "package_id": "Python.Python.3.12"},
+        None,
+        event="PostToolUseFailure",
+    )
+    assert trace.derive_execution_outcome(payload) == ("unknown", None)
+
+
+def test_hook_failure_for_nonexecuting_tool_stays_not_applicable():
+    payload = _hook(
+        "mcp__windows-dev-agent__workflow_plan",
+        {"task": "run tests", "cwd": "project"},
+        None,
+        event="PostToolUseFailure",
+    )
+    assert trace.derive_execution_outcome(payload) == ("not_applicable", None)
 
 
 def test_nonexecution_status_remains_not_applicable():
