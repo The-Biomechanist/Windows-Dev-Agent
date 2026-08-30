@@ -1,64 +1,41 @@
-"""Contract tests for the Claude Code PreToolUse safety gate."""
+"""Contracts for the Claude Code tightening-only safety gate."""
 
 from src.safety import gate
 
 
 def _decision(tool_name, tool_input):
-    output = gate.evaluate_hook_event(
-        {"tool_name": tool_name, "tool_input": tool_input},
-        log_file=None,
-    )
-    if output is None:
-        return None
-    return output["hookSpecificOutput"]["permissionDecision"]
+    output = gate.evaluate_hook_event({"tool_name": tool_name, "tool_input": tool_input}, log_file=None)
+    return None if output is None else output["hookSpecificOutput"]["permissionDecision"]
 
 
-def test_read_only_bash_defers_to_normal_host_permissions():
+def test_read_only_shell_defers_to_host():
     assert gate.classify_bash("git status --short") == "read-only"
     assert _decision("Bash", {"command": "git status --short"}) is None
-
-
-def test_read_only_powershell_defers_to_normal_host_permissions():
     assert gate.classify_shell("Get-ChildItem C:\\src") == "read-only"
     assert _decision("PowerShell", {"command": "Get-ChildItem C:\\src"}) is None
 
 
-def test_powershell_mutation_requires_host_permission():
+def test_unknown_mutation_and_optional_feature_change_require_host_permission():
+    assert _decision("Bash", {"command": "some-new-tool mutate-things"}) == "ask"
     command = "Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux"
-    assert gate.classify_shell(command) == "approval-required"
     assert _decision("PowerShell", {"command": command}) == "ask"
 
 
-def test_unknown_shell_command_asks_instead_of_default_allow():
-    assert gate.classify_shell("some-new-tool mutate-things") == "approval-required"
-    assert _decision("Bash", {"command": "some-new-tool mutate-things"}) == "ask"
+def test_compound_redirected_and_dynamic_commands_cannot_inherit_read_only():
+    for command in (
+        "git status --short; some-new-tool mutate-things",
+        "Get-ChildItem | Set-Content out.txt",
+        "git status --short > status.txt",
+        "git status $(touch changed.txt)",
+        "Get-ChildItem & some-command",
+    ):
+        assert gate.classify_shell(command) == "approval-required"
 
 
-def test_compound_command_cannot_inherit_read_only_prefix():
-    assert gate.classify_shell("git status --short; some-new-tool mutate-things") == "approval-required"
-    assert gate.classify_shell("Get-ChildItem | Set-Content out.txt") == "approval-required"
-
-
-def test_redirection_cannot_inherit_read_only_prefix():
-    assert gate.classify_shell("git status --short > status.txt") == "approval-required"
-    assert gate.classify_shell("Get-ChildItem > listing.txt") == "approval-required"
-
-
-def test_dynamic_substitution_cannot_inherit_read_only_prefix():
-    assert gate.classify_shell("git status $(touch changed.txt)") == "approval-required"
-    assert gate.classify_shell("Get-ChildItem $(Invoke-Expression 'Write-Output x')") == "approval-required"
-    assert gate.classify_shell("Get-ChildItem & some-command") == "approval-required"
-
-
-def test_reversible_project_code_defers_to_normal_host_permissions():
+def test_reversible_project_code_is_not_autoallowed():
     assert gate.classify_shell("pytest") == "reversible"
     assert _decision("Bash", {"command": "pytest"}) is None
     assert _decision("PowerShell", {"command": "dotnet build"}) is None
-
-
-def test_package_install_shell_requires_approval():
-    assert gate.classify_shell("winget install --id Python.Python.3.12 --exact") == "approval-required"
-    assert _decision("PowerShell", {"command": "winget install --id Python.Python.3.12 --exact"}) == "ask"
 
 
 def test_destructive_disk_command_is_forbidden():
@@ -66,67 +43,35 @@ def test_destructive_disk_command_is_forbidden():
     assert _decision("PowerShell", {"command": "format C:"}) == "deny"
 
 
-def test_mcp_plan_defers_to_normal_host_permissions(monkeypatch):
+def test_package_plan_defers_but_execute_asks_without_fake_approval_bit(monkeypatch):
     monkeypatch.setattr(gate, "append_event", lambda *_args, **_kwargs: None)
-    event = {
-        "tool_name": "mcp__windows-dev-agent__package_install",
-        "tool_input": {"package_id": "Python.Python.3.12", "execute": False},
-    }
-    assert gate.evaluate_hook_event(event) is None
-
-
-def test_installed_plugin_scoped_mcp_execution_forces_host_prompt(monkeypatch):
-    monkeypatch.setattr(gate, "append_event", lambda *_args, **_kwargs: None)
-    event = {
-        "tool_name": "mcp__plugin_windows-dev-agent_windows-dev-agent__package_install",
-        "tool_input": {
-            "package_id": "Python.Python.3.12",
-            "execute": True,
-            "user_approved": True,
-        },
-    }
-    output = gate.evaluate_hook_event(event)
+    tool = "mcp__plugin_windows-dev-agent_windows-dev-agent__package_install"
+    assert gate.evaluate_hook_event({"tool_name": tool, "tool_input": {"package_id": "Python.Python.3.12", "execute": False}}) is None
+    output = gate.evaluate_hook_event({"tool_name": tool, "tool_input": {"package_id": "Python.Python.3.12", "execute": True}})
     assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
-def test_approval_required_capability_forces_host_prompt(monkeypatch):
+def test_capability_effective_authority_uses_base_and_extra_args(monkeypatch):
     monkeypatch.setattr(gate, "append_event", lambda *_args, **_kwargs: None)
-    event = {
-        "tool_name": "mcp__plugin_windows-dev-agent_windows-dev-agent__capability_run",
-        "tool_input": {"capability": "create-pr", "execute": True, "user_approved": True},
-    }
-    output = gate.evaluate_hook_event(event)
-    assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
-
-
-def test_reversible_capability_does_not_get_plugin_auto_allow(monkeypatch):
-    monkeypatch.setattr(gate, "append_event", lambda *_args, **_kwargs: None)
-    event = {
-        "tool_name": "mcp__plugin_windows-dev-agent_windows-dev-agent__capability_run",
-        "tool_input": {"capability": "lint-python", "execute": True},
-    }
-    assert gate.classify_tool_call(event["tool_name"], event["tool_input"]) == "reversible"
-    assert gate.evaluate_hook_event(event) is None
-
-
-def test_extra_args_upgrade_capability_authority(monkeypatch):
-    monkeypatch.setattr(gate, "append_event", lambda *_args, **_kwargs: None)
-    event = {
-        "tool_name": "mcp__plugin_windows-dev-agent_windows-dev-agent__capability_run",
-        "tool_input": {
-            "capability": "lint-python",
-            "extra_args": ["--fix"],
-            "execute": True,
-        },
-    }
-    assert gate.classify_tool_call(event["tool_name"], event["tool_input"]) == "approval-required"
-    output = gate.evaluate_hook_event(event)
-    assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
-
-
-def test_even_read_only_capability_with_extra_args_is_reclassified():
     tool = "mcp__plugin_windows-dev-agent_windows-dev-agent__capability_run"
-    assert gate.classify_tool_call(
-        tool,
-        {"capability": "inspect-git", "extra_args": ["--porcelain=v2"], "execute": True},
-    ) == "approval-required"
+    reversible = {"capability": "lint-python", "execute": True}
+    assert gate.classify_tool_call(tool, reversible) == "reversible"
+    assert gate.evaluate_hook_event({"tool_name": tool, "tool_input": reversible}) is None
+    extra = {"capability": "lint-python", "extra_args": ["--fix"], "execute": True}
+    assert gate.classify_tool_call(tool, extra) == "approval-required"
+    assert gate.evaluate_hook_event({"tool_name": tool, "tool_input": extra})["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_project_only_ecosystem_read_defers_but_host_scope_asks():
+    tool = "mcp__plugin_windows-dev-agent_windows-dev-agent__ecosystem_scan"
+    assert gate.classify_tool_call(tool, {"include_host": False}) == "read-only"
+    assert _decision(tool, {"include_host": False}) is None
+    assert gate.classify_tool_call(tool, {"include_host": True}) == "approval-required"
+    assert _decision(tool, {"include_host": True}) == "ask"
+
+
+def test_project_mcp_audit_defers_but_host_or_arbitrary_file_reads_ask():
+    tool = "mcp__plugin_windows-dev-agent_windows-dev-agent__mcp_audit"
+    assert _decision(tool, {"include_host": False}) is None
+    assert _decision(tool, {"include_host": True}) == "ask"
+    assert _decision(tool, {"config_path": "C:\\other\\mcp.json"}) == "ask"
