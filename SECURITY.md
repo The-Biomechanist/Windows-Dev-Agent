@@ -1,0 +1,95 @@
+# Security Policy
+
+Windows Dev Agent executes local development operations on Windows through Claude Code or Codex. Treat the host permission system, project boundary, executable identity, and external observation as separate security surfaces.
+
+## Supported versions
+
+| Version | Status |
+| --- | --- |
+| 0.5.x | Supported after 0.5.0 is published. |
+| 0.4.3 | Supported until 0.5.0 is published. |
+| 0.4.2 and older | Not supported. |
+
+Security fixes normally target the latest supported release line. A vulnerability that affects the release/install mechanism itself may require a new immutable payload rather than an in-place repair.
+
+## Reporting a vulnerability
+
+Prefer GitHub's private vulnerability-reporting / Security Advisory surface for this repository when the **Report a vulnerability** option is available.
+
+If private vulnerability reporting is not available, open a minimal repository issue asking for a private reporting channel. Do **not** put exploit details, credentials, local paths, private project contents, or a working proof of concept in a public issue.
+
+A useful private report includes:
+
+- affected WDA version and commit SHA;
+- host (Claude Code or Codex) and host version;
+- Windows version/build and Python version;
+- the security boundary that was crossed;
+- the smallest reproducible sequence;
+- whether external execution actually started and what post-state was observed;
+- whether the issue requires a malicious project, malicious PATH entry, symlink/reparse point, crafted MCP call, or untrusted Sandbox payload.
+
+## Security boundary
+
+### Host permission is authoritative
+
+WDA does not create its own model-controlled approval token. Claude Code or Codex decides whether an execution-capable call is permitted. WDA hooks can tighten or, in narrowly proven Codex plan-only cases, remove a redundant prompt; they do not make an executing mutation intrinsically safe.
+
+A host UI bug, a user-approved destructive request, or a host policy that deliberately allows a command is outside WDA's promise that its own runtime will manufacture an additional approval ceremony.
+
+### Request validation is still enforced in WDA
+
+The MCP runtime validates tool arguments again at execution time. Advertised JSON schemas are not trusted as the only enforcement layer. Unknown fields, wrong primitive types, oversized argument collections, incompatible Sandbox routing, and other invalid direct calls are rejected by the runtime.
+
+### Executable identity matters
+
+WDA resolves external executables to an absolute identity before execution and carries that identity into the process launch. Captured subprocess execution refuses an unresolved/bare executable.
+
+The plugin's Python bootstrap does not find Python from the active project or inherited PATH. It uses Windows installation authorities/standard host locations or an explicit absolute `WINDOWS_DEV_AGENT_PYTHON` override, requires Python 3.11+, and runs the interpreter in isolated mode.
+
+Windows-owned control-plane executables used by the runtime—such as WSL, Windows Sandbox, and Windows PowerShell discovery—are resolved from the Windows system installation instead of PATH.
+
+### Project scope is not permission to follow links anywhere
+
+Project-scoped reads are bounded to the host project and reject symbolic-link/NTFS-reparse traversal at the relevant read/staging boundary. Failure to establish reparse metadata is not treated as proof that a path is ordinary.
+
+This does not claim that every arbitrary command an approved tool executes is unable to traverse links on its own. The containment guarantee applies to WDA-owned project reads and Windows Sandbox payload staging.
+
+### ACT is not outcome
+
+Launching or requesting an external operation is not evidence that its intended effect occurred. WDA preserves separate states for planned, started, completed, failed, timed-out, and unresolved external execution where the available observation supports those distinctions.
+
+Best-effort process-tree termination after timeout is not proof that every descendant or external side effect was undone.
+
+## Windows Sandbox
+
+The `untrusted_windows` route is the strongest isolation boundary WDA currently implements. It requires Windows Sandbox and explicit workspace-relative payload staging. The mapped payload share is read-only, the `.wsb` file is kept outside the mapped share, and WDA disables vGPU, networking, audio input, video input, printer redirection, and clipboard redirection for this route.
+
+This reduces exposure; it does **not** claim Windows Sandbox is immune to sandbox escapes or host vulnerabilities. Keep Windows patched and do not use WDA's Sandbox wrapper as a substitute for a higher-assurance isolation platform when your threat model requires one.
+
+WSL is a compatibility/interoperability route, not hostile-Windows containment. A Dev Container is a project reproducibility boundary, not a substitute for Windows Sandbox against an untrusted Windows executable.
+
+## Persistent data and privacy
+
+WDA persistent state is intentionally small:
+
+- a bounded environment cache;
+- a bounded audit log plus one rotated predecessor;
+- temporary WDA-owned Windows Sandbox bundles while needed for execution/cleanup.
+
+Audit records do not persist raw commands, MCP arguments, stdout/stderr, or arbitrary tool responses. `logs_query` does not return the physical data-directory path.
+
+Project MCP configuration may contain secrets. WDA's MCP audit summarizes structural metadata and does not return raw command strings, URLs, argument values, or environment values. Do not attach private configuration files to public security reports.
+
+## Out of scope / known limitations
+
+The following are not presently claimed as security guarantees:
+
+- protection against a compromised Claude Code or Codex host;
+- protection after the user/host deliberately authorizes an arbitrary destructive command outside WDA's forbidden classifier;
+- rollback of arbitrary package installs or external mutations;
+- Hyper-V isolation (not an implemented backend);
+- successful completion of the inner Windows Sandbox command merely because the Sandbox process launched;
+- modern-MCP-protocol support beyond the legacy protocol surface currently exercised by the host adapters;
+- resistance to an operating-system vulnerability that defeats the underlying Windows security boundary.
+
+Please report cases where WDA's implementation violates the narrower guarantees it does make: project/data authority, exact executable identity, request validation, outcome honesty, isolation routing, bounded retention, or immutable release identity.
