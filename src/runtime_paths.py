@@ -1,8 +1,9 @@
 """Host-neutral runtime path resolution for Windows Dev Agent.
 
 Claude injects explicit plugin data/project paths into the MCP server. Codex
-bundled MCP configuration does not need to depend on Claude path variables, so
-its fallback data directory is a stable user-writable location.
+uses its plugin data directory when the host exposes it and otherwise falls
+back to a stable user-writable location. Project identity is never inferred
+from an installed-plugin cache path when an explicit project path is available.
 """
 
 from __future__ import annotations
@@ -25,6 +26,10 @@ def resolve_data_dir(*, host: Optional[str] = None) -> Path:
         return Path(configured).expanduser()
 
     if runtime_host(host) == "codex":
+        plugin_data = os.environ.get("PLUGIN_DATA") or os.environ.get("CLAUDE_PLUGIN_DATA")
+        if plugin_data:
+            return Path(plugin_data).expanduser()
+
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
             return Path(local_app_data) / "WindowsDevAgent" / "Codex"
