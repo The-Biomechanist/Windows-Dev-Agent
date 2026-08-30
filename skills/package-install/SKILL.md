@@ -11,9 +11,9 @@ Package installation is `approval-required`. The executing MCP call contains the
 
 ## Procedure
 
-1. **Establish package identity before mutation.** Preserve an exact package ID supplied by the user or authoritative project/config state. Otherwise call `package_search`, inspect the candidates, and resolve the exact identity. Do not guess an ID from naming conventions.
-2. Call `package_install` with `execute: false`. Present the returned source, exact package ID, argv, command, and agreement flags as the planned mutation.
-3. When installation is actually requested, call the same tool with `execute: true`. The active host's permission system decides whether that exact call proceeds.
+1. **Establish package identity before mutation.** Preserve an exact package ID supplied by the user or authoritative project/config state. Otherwise call `package_search`, inspect the candidates, and resolve the exact identity. Preserve the selected `source` value together with the resolved package ID; that source/manager binding is part of the package identity for the following install calls. Do not guess an ID from naming conventions or silently switch package managers after resolution.
+2. Call `package_install` with the resolved package ID, the same `source`, and `execute: false`. Present the returned source, exact package ID, argv, command, and agreement flags as the planned mutation.
+3. When installation is actually requested, call the same tool with the same package ID and `source`, changing only `execute` to `true`. The active host's permission system decides whether that exact call proceeds.
 4. Inspect stdout/stderr, return code, and `execution_started`. Do not infer success from installer invocation. A failed installer can still partially mutate host state.
 5. Verify the resulting host state on the narrowest relevant surface: executable discovery, version output, or the task-specific check that required the package. Any executed install attempt invalidates the cached environment snapshot. If a full snapshot is needed afterward, use fresh state.
 
