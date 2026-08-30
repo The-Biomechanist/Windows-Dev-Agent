@@ -3,7 +3,7 @@
 The gate classifies the effective requested action and returns Claude Code's
 structured permission decision. Only actions proven read-only are auto-allowed.
 Reversible/project-code execution, approval-required actions, and uncertain
-compound commands ask the human. Forbidden actions are denied.
+compound or dynamic shell commands ask the human. Forbidden actions are denied.
 
 A model-provided ``user_approved`` flag never bypasses the host permission
 surface.
@@ -43,6 +43,7 @@ APPROVAL_PATTERNS = [
     re.compile(r"\bgit\s+(push|commit|merge|rebase|reset|clean)\b", re.I),
     re.compile(r"\bgh\s+(pr\s+create|pr\s+merge|release\s+create)\b", re.I),
     re.compile(r"\b(reg\s+(add|delete)|Set-Item(Property)?\b|New-Item(Property)?\b|Remove-Item\b|Enable-WindowsOptionalFeature\b|Disable-WindowsOptionalFeature\b)", re.I),
+    re.compile(r"\b(Invoke-Expression|Start-Process)\b", re.I),
     re.compile(r"\b(rm|del|erase|rmdir)\b", re.I),
 ]
 
@@ -51,7 +52,10 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\\\Windows\\\\System32)", re.I),
 ]
 
-COMPOUND_COMMAND = re.compile(r"(;|\r|\n|&&|\|\||\|)")
+# A command containing chaining, redirection, command/array substitution, or a
+# dynamic invocation operator is not eligible for the narrow read-only allow
+# list. Regexes are not a shell parser; uncertainty returns to host permission.
+DYNAMIC_SHELL = re.compile(r"(;|\r|\n|&&|\|\||\||>|<|\$\(|@\(|`|(?<!&)&(?!&))")
 
 # Claude Code scopes MCP tools from a plugin-bundled server. Keep the bare
 # server prefix as well for direct/local MCP execution and tests.
@@ -69,7 +73,7 @@ def classify_shell(command: str) -> str:
     for pattern in APPROVAL_PATTERNS:
         if pattern.search(command):
             return "approval-required"
-    if COMPOUND_COMMAND.search(command):
+    if DYNAMIC_SHELL.search(command):
         return "approval-required"
     for pattern in READ_ONLY_PATTERNS:
         if pattern.search(command):
