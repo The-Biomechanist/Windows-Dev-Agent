@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|PowerShell|mcp__windows-dev-agent__capability_run|mcp__windows-dev-agent__package_install|mcp__windows-dev-agent__sandbox_run",
+        "matcher": "^(Bash|PowerShell|mcp__(windows-dev-agent|plugin_windows-dev-agent_windows-dev-agent)__(capability_run|package_install|sandbox_run))$",
         "hooks": [
           {
             "type": "command",
@@ -14,7 +14,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__windows-dev-agent__.*",
+        "matcher": "^mcp__(windows-dev-agent|plugin_windows-dev-agent_windows-dev-agent)__.*$",
         "hooks": [
           {
             "type": "command",
@@ -26,7 +26,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "mcp__windows-dev-agent__.*",
+        "matcher": "^mcp__(windows-dev-agent|plugin_windows-dev-agent_windows-dev-agent)__.*$",
         "hooks": [
           {
             "type": "command",
