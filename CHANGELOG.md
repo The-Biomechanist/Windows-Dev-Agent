@@ -9,13 +9,13 @@ Production-hardening and public-release cleanup.
 ### Runtime and bootstrap
 
 - Raise the supported Python floor to 3.11.
-- Add an isolated Windows-native Python launcher that avoids project/PATH executable shadowing and supports only an explicit absolute host override.
-- Remove MCP startup dependence on process `cwd`.
+- Add an isolated Windows-native Python launcher that avoids project/PATH executable shadowing, supports an explicit absolute host override, and runs correctly under Windows PowerShell 5.1.
+- Remove ambient/project-current-directory import dependence: Claude launches from the plugin root explicitly, while Codex uses its plugin-owned startup directory only to resolve the bundled launcher and never as project identity.
 - Consolidate Claude and Codex onto one bounded stdio transport.
 - Add strict runtime MCP argument validation and request/resource bounds.
 - Remove the directly executable host-neutral MCP core path.
 - Consolidate captured external execution into a bounded streaming runner and execute the exact resolved executable identity.
-- Resolve Windows-owned control-plane binaries from the Windows system installation rather than PATH.
+- Resolve runtime-owned Windows control-plane binaries such as discovery PowerShell, WSL, and Windows Sandbox from trusted Windows locations rather than PATH; Claude also binds its bootstrap PowerShell to the Windows system installation.
 
 ### Isolation
 
@@ -24,13 +24,14 @@ Production-hardening and public-release cleanup.
 - Require payload staging for every `untrusted_windows` request.
 - Disable vGPU, networking, audio input, video input, printer redirection, and clipboard redirection for the hostile-Windows route.
 - Keep generated `.wsb` configuration outside the mapped read-only Sandbox share.
-- Make WDA own Sandbox bundle cleanup and stale-bundle collection.
+- Make WDA own Sandbox bundle cleanup responsibility with best-effort process-exit cleanup plus stale-bundle collection at host startup and before later Sandbox launches.
 
 ### State, security, and observability
 
-- Apply symlink/reparse containment to project-local configuration reads.
+- Apply symlink/reparse containment to project-local configuration reads and Dev Container configuration detection.
 - Make discovery failures return the canonical snapshot shape.
-- Add bounded atomic discovery cache writes and mutation-generation protection against stale cache resurrection.
+- Add bounded atomic discovery cache writes, a Windows interprocess cache lock, and mutation-generation protection against stale cache resurrection.
+- Fail package-install execution closed when the cache mutation/invalidation transition cannot be established before launch.
 - Serialize audit rotation/append between Windows hook processes.
 - Add audit schema version and explicit lifecycle fields while preserving legacy log readability.
 - Stop exposing the physical WDA data directory from `logs_query`.
@@ -42,7 +43,7 @@ Production-hardening and public-release cleanup.
 - Remove legacy command aliases, the duplicate Windows orchestrator agent, unused APM metadata, empty runtime requirements metadata, unused runtime-path helpers, and release-history naming residue from tests.
 - Rewrite public documentation around installation, capabilities, boundaries, limitations, and development.
 - Add `SECURITY.md`.
-- Update Windows CI to test Python 3.11 and 3.14 and verify immutable published release ancestry without freezing later development to the last payload.
+- Update Windows CI to test Python 3.11 and 3.14, exercise the Windows PowerShell 5.1 bootstrap, and verify immutable published release ancestry without freezing later development to the last payload.
 
 ## 0.4.3
 
