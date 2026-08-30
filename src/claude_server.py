@@ -3,6 +3,7 @@
 Claude supplies the active project root through ``WINDOWS_DEV_AGENT_PROJECT_DIR``.
 Project-scoped tool arguments may select that directory or a descendant, but may
 not replace the host-owned project boundary with an arbitrary filesystem path.
+Relative project paths are interpreted under the host-owned project root.
 """
 
 from __future__ import annotations
@@ -76,7 +77,11 @@ def _bind_project_scope(request: dict[str, Any]) -> tuple[Optional[dict[str, Any
         return None, error or "Claude project directory is required"
 
     raw = str(tool_args.get(project_arg, "")).strip()
-    candidate = Path(raw).expanduser().resolve() if raw else root
+    if raw:
+        requested = Path(raw).expanduser()
+        candidate = requested.resolve() if requested.is_absolute() else (root / requested).resolve()
+    else:
+        candidate = root
     if not candidate.is_dir():
         return None, f"Not a directory: {candidate}"
     try:
