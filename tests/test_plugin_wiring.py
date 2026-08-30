@@ -10,6 +10,7 @@ from src import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLED_PREFIX = "mcp__plugin_windows-dev-agent_windows-dev-agent__"
+TRUSTED_WINDOWS_POWERSHELL = r"${SystemRoot}\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 
 def test_manifest_and_runtime_version_match_release():
@@ -24,7 +25,7 @@ def test_manifest_and_runtime_version_match_release():
 def test_mcp_server_uses_plugin_root_launcher_without_cwd_import_dependency():
     config = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
     server = config["mcpServers"]["windows-dev-agent"]
-    assert server["command"] == "powershell.exe"
+    assert server["command"] == TRUSTED_WINDOWS_POWERSHELL
     assert "${CLAUDE_PLUGIN_ROOT}/scripts/launch-python.ps1" in server["args"]
     assert server["args"][-2:] == ["-Module", "src.claude_server"]
     assert "cwd" not in server
@@ -42,7 +43,7 @@ def test_python_launcher_is_isolated_and_never_searches_path_for_python():
     assert "$env:PATH" not in text
 
 
-def test_hook_scripts_use_argv_form_and_persistent_plugin_data():
+def test_hook_scripts_use_argv_form_persistent_plugin_data_and_windows_owned_powershell():
     config = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     hooks = [
         hook
@@ -52,7 +53,7 @@ def test_hook_scripts_use_argv_form_and_persistent_plugin_data():
         if hook.get("type") == "command"
     ]
     assert hooks
-    assert all(hook["command"] == "powershell.exe" for hook in hooks)
+    assert all(hook["command"] == TRUSTED_WINDOWS_POWERSHELL for hook in hooks)
     assert all("${CLAUDE_PLUGIN_ROOT}/scripts/launch-python.ps1" in hook["args"] for hook in hooks)
     assert all("${CLAUDE_PLUGIN_DATA}" in hook["args"] for hook in hooks)
 
