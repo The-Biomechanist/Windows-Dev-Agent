@@ -14,8 +14,10 @@ Use planning when it changes execution quality. A trivial read or obvious single
 3. **Get the runtime scaffold.** Call `workflow_plan` with the task, relevant context, and the active project boundary. In Codex, pass the current session/project directory explicitly as `cwd`.
 4. **Resolve the route.** Choose the smallest coherent path that satisfies the task. If materially different mechanisms remain live, name the discriminator; do not manufacture cosmetic alternatives.
 5. **State execution phases.** For each consequential phase include the entry state actually required, concrete action/tool, safety class, observable exit condition, and rollback only when an explicit restore path exists.
-6. **Execute under the active host permission boundary.** The model constructs the concrete executing call; Claude Code or Codex then decides whether that same call is permitted. Do not add a second model-controlled confirmation field that claims the host already approved it.
-7. **Verify before continuing.** A phase that changes upstream state invalidates downstream assumptions that depended on it; re-evaluate those dependencies rather than blindly replaying the original plan.
+6. **Bind plan-first execution to fresh runtime state.** For `capability_run`, `package_install`, or `sandbox_run`, first obtain the concrete `execute: false` plan. Review the returned route, resolved executable, argv/project binding, and `plan_fingerprint`, then carry that fingerprint unchanged into the corresponding `execute: true` call. The fingerprint establishes only that the reviewed execution plan is still current; it does not establish permission.
+7. **Execute under the active host permission boundary.** The model constructs the concrete executing call; Claude Code or Codex then decides whether that same call is permitted. Do not add a second model-controlled confirmation field that claims the host already approved it.
+8. **Recover from stale plans at the changed dependency.** If a plan-first executor returns `stale_plan`, do not retry the unchanged call or silently substitute the newly available executable/backend. Obtain a fresh plan, review the changed binding, and reconsider every downstream step that depended on the invalidated plan while preserving unrelated state.
+9. **Verify before continuing.** A phase that changes upstream state invalidates downstream assumptions that depended on it; re-evaluate those dependencies rather than blindly replaying the original plan.
 
 ## Stop conditions
 
