@@ -7,8 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${PLUGIN_ROOT}/src/safety/codex_gate.py\" --data-dir \"${PLUGIN_DATA}\"",
-            "commandWindows": "python \"${PLUGIN_ROOT}/src/safety/codex_gate.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "command": "python \"${PLUGIN_ROOT}/src/safety/codex_gate.py\"",
+            "commandWindows": "python \"${PLUGIN_ROOT}/src/safety/codex_gate.py\"",
             "timeout": 30,
             "description": "Deny forbidden Windows Dev Agent actions and otherwise defer to Codex permissions"
           }
@@ -21,8 +21,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\" --data-dir \"${PLUGIN_DATA}\"",
-            "commandWindows": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "command": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\"",
+            "commandWindows": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\"",
             "timeout": 30,
             "description": "Allow plan-only calls; defer executing calls to the normal Codex approval prompt"
           }
@@ -35,8 +35,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${PLUGIN_ROOT}/src/observability/codex_trace.py\" --data-dir \"${PLUGIN_DATA}\"",
-            "commandWindows": "python \"${PLUGIN_ROOT}/src/observability/codex_trace.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "command": "python \"${PLUGIN_ROOT}/src/observability/codex_trace.py\"",
+            "commandWindows": "python \"${PLUGIN_ROOT}/src/observability/codex_trace.py\"",
             "timeout": 30,
             "description": "Append minimal Codex Windows Dev Agent completion metadata"
           }
@@ -48,8 +48,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${PLUGIN_ROOT}/src/observability/codex_audit_report.py\" --data-dir \"${PLUGIN_DATA}\"",
-            "commandWindows": "python \"${PLUGIN_ROOT}/src/observability/codex_audit_report.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "command": "python \"${PLUGIN_ROOT}/src/observability/codex_audit_report.py\"",
+            "commandWindows": "python \"${PLUGIN_ROOT}/src/observability/codex_audit_report.py\"",
             "timeout": 30,
             "description": "Emit a Codex-valid Windows Dev Agent session audit summary"
           }
