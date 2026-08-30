@@ -36,9 +36,41 @@ jobs:
         run: |
           $env:WINDOWS_DEV_AGENT_PYTHON = (python -c "import sys; print(sys.executable)").Trim()
           $event = '{"tool_name":"PowerShell","tool_input":{"command":"Get-ChildItem"}}'
-          $output = $event | & ./scripts/launch-python.ps1 -Module src.safety.claude_gate
-          if ($LASTEXITCODE -ne 0) { throw "launcher exited $LASTEXITCODE" }
-          if ($output) { throw "read-only safety hook unexpectedly emitted a permission decision: $output" }
+          $systemPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $launcher = (Resolve-Path "./scripts/launch-python.ps1").Path
+
+          $psi = [System.Diagnostics.ProcessStartInfo]::new()
+          $psi.FileName = $systemPowerShell
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardInput = $true
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          foreach ($argument in @(
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            $launcher,
+            "-Module",
+            "src.safety.claude_gate"
+          )) {
+            [void]$psi.ArgumentList.Add($argument)
+          }
+
+          $process = [System.Diagnostics.Process]::Start($psi)
+          $process.StandardInput.WriteLine($event)
+          $process.StandardInput.Close()
+          $output = $process.StandardOutput.ReadToEnd()
+          $errorOutput = $process.StandardError.ReadToEnd()
+          $process.WaitForExit()
+
+          if ($process.ExitCode -ne 0) {
+            throw "launcher exited $($process.ExitCode): $errorOutput"
+          }
+          if ($output.Trim()) {
+            throw "read-only safety hook unexpectedly emitted a permission decision: $output"
+          }
           Write-Host "isolated launcher OK: $env:WINDOWS_DEV_AGENT_PYTHON"
       - name: MCP preflight
         shell: pwsh
@@ -74,7 +106,8 @@ jobs:
       - name: Native discovery producer smoke test
         shell: pwsh
         run: |
-          $raw = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./src/discovery/discovery.ps1
+          $systemPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $raw = & $systemPowerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./src/discovery/discovery.ps1
           if ($LASTEXITCODE -ne 0) { throw "discovery.ps1 exited $LASTEXITCODE" }
           $snapshot = $raw | ConvertFrom-Json
           if ($null -eq $snapshot.system) { throw "discovery snapshot is missing system" }
