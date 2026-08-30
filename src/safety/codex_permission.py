@@ -1,8 +1,7 @@
 """Codex PermissionRequest adapter for plan-first Windows Dev Agent tools.
 
-Codex MCP approval policy is tool-scoped. The three mutation-capable tools are
-therefore configured to prompt by default. When Codex is about to prompt for a
-plan-only call (``execute=false``), this hook can safely allow that request.
+Codex MCP approval policy is tool-scoped. Mutation-capable tools prompt by
+default; this hook allows only plan-only calls after Codex has decided to ask.
 Executing calls make no hook decision and continue to the normal human prompt.
 """
 
@@ -20,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.observability.trace import append_event, resolve_log_file
+from src.runtime_paths import resolve_codex_data_dir
 from src.safety.codex_gate import _shared_tool_name
 from src.safety.gate import classify_tool_call
 
@@ -48,6 +48,7 @@ def evaluate_permission_request(
     elif tool_name in PLAN_FIRST_TOOLS and not bool(tool_input.get("execute", False)):
         behavior = "allow"
 
+    target_log = log_file or resolve_log_file(str(resolve_codex_data_dir()))
     try:
         append_event(
             {
@@ -61,7 +62,7 @@ def evaluate_permission_request(
                 "permission_decision": behavior or "host-default",
                 "host": "codex",
             },
-            log_file,
+            target_log,
         )
     except Exception:
         pass
@@ -92,10 +93,8 @@ def main() -> int:
     except Exception:
         return 0
 
-    output = evaluate_permission_request(
-        event,
-        log_file=resolve_log_file(args.data_dir),
-    )
+    log_file = resolve_log_file(args.data_dir) if args.data_dir else None
+    output = evaluate_permission_request(event, log_file=log_file)
     if output is not None:
         print(json.dumps(output))
     return 0
