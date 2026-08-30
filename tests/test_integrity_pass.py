@@ -30,6 +30,13 @@ def _capability(cap_id: str, description: str, tags: tuple[str, ...], tool_name:
     )
 
 
+def test_task_tokens_preserve_plural_and_singular_forms():
+    tokens = server._task_tokens("Run the Python tests")
+    assert "tests" in tokens
+    assert "test" in tokens
+    assert "python" in tokens
+
+
 def test_workflow_plan_preserves_equal_top_route_ambiguity(tmp_path: Path, monkeypatch):
     capabilities = {
         "alpha": _capability("alpha", "Handle shared route", ("shared", "route"), "alpha-tool"),
@@ -44,6 +51,26 @@ def test_workflow_plan_preserves_equal_top_route_ambiguity(tmp_path: Path, monke
     assert result["selected_candidate"] is None
     assert result["route_discriminator"]["candidates"] == ["alpha", "beta"]
     assert result["phases"][2]["action"] == "Do not execute from this scaffold yet"
+
+
+def test_tool_availability_does_not_resolve_equal_semantic_route(tmp_path: Path, monkeypatch):
+    capabilities = {
+        "alpha": _capability("alpha", "Handle shared route", ("shared", "route"), "alpha-tool"),
+        "beta": _capability("beta", "Handle shared route", ("shared", "route"), "beta-tool"),
+    }
+    monkeypatch.setattr(server, "load_capabilities", lambda: capabilities)
+    monkeypatch.setattr(
+        server,
+        "select_available_tool",
+        lambda capability: capability.tools[0] if capability.id == "beta" else None,
+    )
+
+    result = run(server.handle_workflow_plan({"task": "shared route", "cwd": str(tmp_path)}))
+
+    assert result["route_state"] == "ambiguous"
+    assert result["selected_candidate"] is None
+    assert result["route_discriminator"]["candidates"] == ["alpha", "beta"]
+    assert result["route_discriminator"]["availability"] == {"alpha": None, "beta": "beta-tool"}
 
 
 def test_workflow_plan_does_not_fall_through_unavailable_strongest_match(tmp_path: Path, monkeypatch):
@@ -66,22 +93,58 @@ def test_workflow_plan_does_not_fall_through_unavailable_strongest_match(tmp_pat
     assert "fallback" not in result["route_discriminator"]["candidates"]
 
 
-def test_workflow_plan_can_use_availability_to_break_equal_top_tie(tmp_path: Path, monkeypatch):
+def test_description_only_similarity_does_not_select_capability(tmp_path: Path, monkeypatch):
     capabilities = {
-        "alpha": _capability("alpha", "Handle shared route", ("shared", "route"), "alpha-tool"),
-        "beta": _capability("beta", "Handle shared route", ("shared", "route"), "beta-tool"),
+        "alpha": _capability(
+            "alpha",
+            "Inspect deployment manifest and summarize deployment state",
+            ("specialized",),
+            "alpha-tool",
+        )
     }
     monkeypatch.setattr(server, "load_capabilities", lambda: capabilities)
-    monkeypatch.setattr(
-        server,
-        "select_available_tool",
-        lambda capability: capability.tools[0] if capability.id == "beta" else None,
+    monkeypatch.setattr(server, "select_available_tool", lambda capability: capability.tools[0])
+
+    result = run(
+        server.handle_workflow_plan(
+            {"task": "inspect the deployment manifest", "cwd": str(tmp_path)}
+        )
     )
 
-    result = run(server.handle_workflow_plan({"task": "shared route", "cwd": str(tmp_path)}))
+    assert result["route_state"] == "no_match"
+    assert result["selected_candidate"] is None
+    assert result["candidate_capabilities"][0]["description_score"] > 0
+    assert result["candidate_capabilities"][0]["discriminating_score"] == 0
+    assert "description-only" in result["route_discriminator"]["reason"]
+
+
+def test_explicit_capability_identity_can_select_supported_route(tmp_path: Path, monkeypatch):
+    capabilities = {
+        "test-python": _capability(
+            "test-python",
+            "Run the Python test suite",
+            ("python", "test"),
+            "pytest",
+        ),
+        "test-dotnet": _capability(
+            "test-dotnet",
+            "Run the .NET test suite",
+            ("dotnet", "test"),
+            "dotnet",
+        ),
+    }
+    monkeypatch.setattr(server, "load_capabilities", lambda: capabilities)
+    monkeypatch.setattr(server, "select_available_tool", lambda capability: capability.tools[0])
+
+    result = run(
+        server.handle_workflow_plan(
+            {"task": "run the Python tests", "cwd": str(tmp_path)}
+        )
+    )
 
     assert result["route_state"] == "selected"
-    assert result["selected_candidate"]["capability"] == "beta"
+    assert result["selected_candidate"]["capability"] == "test-python"
+    assert "python" in result["selected_candidate"]["discriminating_matches"]
 
 
 def test_logs_query_reads_rotated_predecessor_before_current_log(tmp_path: Path, monkeypatch):
