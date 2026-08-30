@@ -13,7 +13,7 @@ Start with `ecosystem_scan` for the current project and `include_host: false`. T
 
 Request `include_host: true` only when user-level extensions, plugins, MCP configuration, or installed package state is actually needed to decide the consolidation. That broader read remains on the active host permission surface. Use `include_packages: true` only together with `include_host: true` and only when installed WinGet packages matter.
 
-In Codex, project-only ecosystem reads may be auto-approved by the optional trusted `PermissionRequest` hook; host-wide reads are not. If the plugin hooks have not been trusted, Codex may prompt even for the project-only read.
+In Codex, `ecosystem_scan` remains on native approval even for project-only requests. The adapter requires a caller-supplied `cwd` but cannot independently prove that an arbitrary supplied directory is the active project, so the optional trusted hook does not auto-approve this filesystem inventory read.
 
 Do not invent enabled/disabled plugin state or configuration meaning the scan cannot establish. Treat unavailable host-owned state as `unknown` unless an authoritative host surface is actually queried.
 
