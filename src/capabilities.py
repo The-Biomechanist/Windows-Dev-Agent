@@ -1,9 +1,8 @@
 """Small executable capability registry for Windows Dev Agent.
 
-The catalog uses the JSON-compatible subset of YAML and the Python standard
-library. Commands are argv vectors and never execute through a host shell.
-Safety is computed for the effective request: appended caller arguments cannot
-inherit a weaker classification from the base capability.
+The catalog is JSON and uses only the Python standard library. Commands are argv
+vectors and never execute through a host shell. Executable identity is resolved
+once and the exact absolute path is carried into execution.
 
 Host permission is deliberately not represented as a model-supplied field. An
 MCP client requests execution with ``execute=true``; Claude Code or Codex then
@@ -16,12 +15,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-import shutil
 import subprocess
 from typing import Any, Iterable, Mapping, Optional
 
+from src.execution import resolve_executable, run_bounded
+
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CAPABILITIES_FILE = ROOT / "capabilities.yaml"
+DEFAULT_CAPABILITIES_FILE = ROOT / "capabilities.json"
 VALID_SAFETY = {"read-only", "reversible", "approval-required", "forbidden"}
 
 
@@ -81,9 +81,7 @@ def load_capabilities(path: Optional[Path] = None) -> dict[str, Capability]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise CapabilityConfigError(
-            f"Capability file must use JSON-compatible YAML syntax: {exc}"
-        ) from exc
+        raise CapabilityConfigError(f"Capability file must be valid JSON: {exc}") from exc
 
     if not isinstance(raw, Mapping):
         raise CapabilityConfigError("Capability catalog must contain an object mapping")
@@ -136,10 +134,11 @@ def load_capabilities(path: Optional[Path] = None) -> dict[str, Capability]:
 
 
 def select_available_tool(capability: Capability) -> Optional[CapabilityTool]:
-    """Return the first configured tool whose executable is currently present."""
+    """Return the first configured tool with a resolved executable identity."""
     for tool in capability.tools:
-        if shutil.which(tool.executable):
-            return tool
+        executable = resolve_executable(tool.executable)
+        if executable:
+            return CapabilityTool(name=tool.name, argv=(executable, *tool.argv[1:]))
     return None
 
 
@@ -166,13 +165,7 @@ def run_capability(
     timeout_seconds: int = 120,
     path: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """Plan or execute a configured capability.
-
-    ``execute=true`` means the MCP client is requesting the concrete action.
-    The active host owns any human approval prompt for that same tool call. The
-    runtime independently blocks forbidden capabilities and never infers host
-    approval from a model-controlled boolean.
-    """
+    """Plan or execute a configured capability under host-owned approval."""
     capabilities = load_capabilities(path)
     capability = capabilities.get(capability_id)
     if capability is None:
@@ -189,7 +182,7 @@ def run_capability(
             "capability": capability.id,
             "description": capability.description,
             "safety_class": capability.safety,
-            "checked_tools": [tool.name for tool in capability.tools],
+            "checked_tools": [configured.name for configured in capability.tools],
         }
 
     extra_args = extra_args or []
@@ -221,39 +214,13 @@ def run_capability(
         if not run_cwd.is_dir():
             return {**plan, "status": "invalid_input", "error": f"cwd is not a directory: {run_cwd}"}
 
-    try:
-        result = subprocess.run(
-            argv,
-            cwd=str(run_cwd) if run_cwd else None,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=max(1, min(int(timeout_seconds), 600)),
-            shell=False,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return {
-            **plan,
-            "status": "failed",
-            "error": str(exc),
-            "execution_started": True,
-            "timed_out": True,
-        }
-    except OSError as exc:
-        return {
-            **plan,
-            "status": "failed",
-            "error": str(exc),
-            "execution_started": False,
-        }
-
+    result = run_bounded(
+        argv,
+        cwd=run_cwd,
+        timeout=max(1, min(int(timeout_seconds), 600)),
+    )
     return {
         **plan,
-        "status": "completed" if result.returncode == 0 else "failed",
-        "returncode": result.returncode,
-        "stdout": result.stdout[-8000:],
-        "stderr": result.stderr[-4000:],
-        "succeeded": result.returncode == 0,
-        "execution_started": True,
+        **result,
+        "status": "completed" if result.get("succeeded") else "failed",
     }
