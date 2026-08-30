@@ -12,18 +12,18 @@ Use isolation because the workload benefits from it, not as ceremony. The implem
 | --- | --- | --- |
 | Linux-native command or lightweight isolated test | WSL | Runs `wsl -- bash -lc <command>` and captures the result. |
 | Reproducible project environment already using devcontainers | Dev Container | Runs through the `devcontainer` CLI and captures the result. |
-| Untrusted or installer-like Windows workload | Windows Sandbox | Generates a read-only mapped `.wsb` launch bundle and opens Windows Sandbox interactively. |
+| Untrusted or installer-like Windows workload | Windows Sandbox | On execution, generates a read-only mapped `.wsb` launch bundle and opens Windows Sandbox interactively. |
 
 `environment: auto` chooses the first available route in this order: WSL, Dev Container, Windows Sandbox. Select an explicit environment when that ordering is not appropriate to the task.
 
 ## Procedure
 
 1. Inspect relevant isolation availability with `env_inspect` when it is not already known.
-2. Call `sandbox_run` with `execute: false` and inspect the selected environment and launch argv. Planning must not launch the workload.
+2. Call `sandbox_run` with `execute: false` and inspect the selected environment and launch plan. Planning does not launch the workload or materialize a Windows Sandbox bundle.
 3. If the selected route does not fit the task, choose an explicit supported environment or report the missing prerequisite.
 4. To launch, call `sandbox_run` with `execute: true` and `user_approved: true`. The bundled PreToolUse hook still returns `permissionDecision: ask`; execution occurs only if the user accepts the host prompt.
 5. For WSL and Dev Container runs, evaluate the captured return code/stdout/stderr. For Windows Sandbox, report only that the interactive sandbox was launched; do not claim the command succeeded without an observation from inside that sandbox.
-6. Windows Sandbox plans return a temporary config/cleanup path. Remove that temporary bundle only after the sandbox no longer needs it.
+6. Executed Windows Sandbox launches return the temporary config/cleanup path. Remove that temporary bundle only after the sandbox no longer needs it.
 
 ## Safety and scope
 
