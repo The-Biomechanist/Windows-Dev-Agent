@@ -9,7 +9,10 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from trace import resolve_log_file
+try:
+    from .trace import resolve_log_file
+except ImportError:  # direct hook-script execution
+    from trace import resolve_log_file
 
 
 def load_events(log_file: Optional[Path] = None) -> list[dict[str, Any]]:
