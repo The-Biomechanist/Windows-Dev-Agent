@@ -23,14 +23,16 @@ Choose the boundary from the task's required property, not from whichever backen
 2. Inspect relevant backend availability with `env_inspect` when it is not already established. Treat `null`/unknown availability as unresolved rather than missing.
 3. For WSL or Dev Container work, use the active project as `workspace_folder`. WSL execution enters that Windows project directory through WSL's `--cd` boundary and uses `sh -lc`; a task requiring Bash-specific semantics should request Bash explicitly.
 4. For Windows Sandbox, identify exactly which project files/directories the isolated command needs and pass them as workspace-relative `payload_paths`. The runtime validates that they stay inside the workspace, rejects symbolic-link escapes and overlapping selections, and limits the staged input to 10,000 filesystem entries and 1 GiB total file bytes. Write the inner command relative to the staged payload root (`C:\WDAShare\payload`).
-5. Call `sandbox_run` with `execute: false` and inspect the selected route, payload list, and launch plan. Planning must not create the temporary bundle or launch the workload. In Codex, a trusted `PermissionRequest` hook may auto-allow this plan-only request; without trusted hooks, the host may prompt for the plan.
-6. To launch, call the same reviewed tool with `execute: true`. The active host decides whether that exact call proceeds; do not invent a second approval token.
-7. For WSL and Dev Container runs, use captured return code/stdout/stderr only for what they establish. For Windows Sandbox, report only that the interactive sandbox launched; the inner command remains `unknown` until an observation from inside the sandbox establishes its outcome.
-8. An executed Windows Sandbox launch returns `cleanup_path`. Remove the temporary bundle only after the sandbox no longer needs it. If staging or process launch fails before the Sandbox starts, the runtime removes the partial bundle itself.
+5. Call `sandbox_run` with `execute: false` and inspect the selected environment, `resolved_executable`, payload list, argv/launch kind, and `plan_fingerprint`. Planning must not create the temporary bundle or launch the workload. In Codex, a trusted `PermissionRequest` hook may auto-allow this plan-only request; without trusted hooks, the host may prompt for the plan.
+6. To launch, call the same reviewed tool with `execute: true`, carrying the returned `plan_fingerprint` unchanged. The fingerprint binds the selected route/executable/project/payload plan; it is **not** approval. The active host decides whether that exact executing call proceeds.
+7. If execution returns `stale_plan`, the route or executable binding changed after review. Do not silently switch backends or reuse the old fingerprint. Obtain a fresh plan, review the changed route, and launch only that fresh plan if it still satisfies the required boundary.
+8. For WSL and Dev Container runs, use captured return code/stdout/stderr only for what they establish. For Windows Sandbox, report only that the interactive sandbox launched; the inner command remains `unknown` until an observation from inside the sandbox establishes its outcome.
+9. An executed Windows Sandbox launch returns `cleanup_path`. Remove the temporary bundle only after the sandbox no longer needs it. If staging or process launch fails before the Sandbox starts, the runtime removes the partial bundle itself.
 
 ## Safety and scope
 
 - Sandbox execution is `approval-required` even when the inner command looks harmless.
+- `plan_fingerprint` is a freshness/identity guard only and never substitutes for host permission.
 - WSL interoperability is not a substitute for Windows Sandbox containment.
 - Hyper-V is not an implemented `sandbox_run` backend.
 - Do not map arbitrary host folders writable into Windows Sandbox. Only the generated staging bundle is mapped, read-only.
