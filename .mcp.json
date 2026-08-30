@@ -4,7 +4,9 @@
       "command": "python",
       "args": ["-m", "src.mcp.server"],
       "cwd": "${CLAUDE_PLUGIN_ROOT}",
-      "env": {},
+      "env": {
+        "WINDOWS_DEV_AGENT_DATA_DIR": "${CLAUDE_PLUGIN_DATA}"
+      },
       "description": "Windows-native agent orchestration server. Exposes environment inspection, safe capability routing, workflow planning, package setup, isolation, ecosystem inventory, and audit tools."
     }
   }
