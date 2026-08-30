@@ -1,9 +1,9 @@
-"""Windows Dev Agent MCP stdio server.
+"""Shared Windows Dev Agent MCP stdio runtime.
 
-The server exposes a small Windows-oriented orchestration surface. Mutating
-operations are plan-first. Approval-required execution also needs
-``user_approved=true`` at the server layer, while the bundled Claude Code
-PreToolUse hook independently forces the actual human permission prompt.
+This module owns Windows behavior. Host adapters own package identity, project
+binding, and human approval. Mutation-capable tools are plan-first, but the
+runtime does not try to encode a host permission event in model-controlled tool
+arguments. Forbidden capabilities remain blocked here as defense in depth.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import tempfile
 from typing import Any, Optional
 from xml.sax.saxutils import escape as xml_escape
 
+from src import __version__
 from src.capabilities import (
     CapabilityConfigError,
     command_display,
@@ -33,9 +34,7 @@ from src.capabilities import (
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DATA_DIR = ROOT / ".cache"
-DATA_DIR = Path(
-    os.environ.get("WINDOWS_DEV_AGENT_DATA_DIR", str(DEFAULT_DATA_DIR))
-).expanduser()
+DATA_DIR = Path(os.environ.get("WINDOWS_DEV_AGENT_DATA_DIR", str(DEFAULT_DATA_DIR))).expanduser()
 LOG_FILE = DATA_DIR / "agent.log"
 ENVIRONMENT_CACHE_FILE = DATA_DIR / "environment.json"
 
@@ -52,12 +51,10 @@ def _bool_property(description: str, default: bool = False) -> dict[str, Any]:
 TOOLS = [
     {
         "name": "env_inspect",
-        "description": "Build a Windows development-environment snapshot using the native discovery layer.",
+        "description": "Build a Windows environment snapshot whose availability fields preserve observed true/false/unknown state.",
         "inputSchema": {
             "type": "object",
-            "properties": {
-                "force_refresh": _bool_property("Skip discovery cache and refresh machine state")
-            },
+            "properties": {"force_refresh": _bool_property("Skip the time-bound discovery cache")},
         },
     },
     {
@@ -76,15 +73,14 @@ TOOLS = [
     },
     {
         "name": "capability_run",
-        "description": "Plan or execute a named capability from capabilities.yaml using the first available configured tool. Commands execute without a host shell and default to the Claude project directory.",
+        "description": "Plan or execute a named argv-based capability in the active project. The active host owns approval for the exact executing call.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "capability": {"type": "string", "description": "Capability ID from capabilities.yaml"},
+                "capability": {"type": "string"},
                 "extra_args": {"type": "array", "items": {"type": "string"}, "default": []},
-                "cwd": {"type": "string", "description": "Optional working directory; defaults to the Claude project directory"},
-                "execute": _bool_property("Actually execute instead of returning the planned argv"),
-                "user_approved": _bool_property("Set only after the user accepts the host permission prompt"),
+                "cwd": {"type": "string", "description": "Working directory; defaults to the active host project"},
+                "execute": _bool_property("Execute instead of returning the concrete plan"),
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600, "default": 120},
             },
             "required": ["capability"],
@@ -92,12 +88,13 @@ TOOLS = [
     },
     {
         "name": "workflow_plan",
-        "description": "Build a deterministic execution scaffold from the registered capabilities for a task. The slash command can add richer task-specific reasoning.",
+        "description": "Build a deterministic capability-aware execution scaffold for a task.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task": {"type": "string"},
                 "context": {"type": "string", "default": ""},
+                "cwd": {"type": "string", "description": "Project boundary for the plan"},
             },
             "required": ["task"],
         },
@@ -108,29 +105,28 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Human package name or candidate package identity"},
-                "source": {"type": "string", "enum": ["winget", "chocolatey", "scoop"], "default": "winget"}
+                "query": {"type": "string"},
+                "source": {"type": "string", "enum": ["winget", "chocolatey", "scoop"], "default": "winget"},
             },
             "required": ["query"],
         },
     },
     {
         "name": "package_install",
-        "description": "Plan or perform one package installation through WinGet, Chocolatey, or Scoop after exact identity has been resolved. Execution always goes through the host approval gate.",
+        "description": "Plan or execute one exact WinGet, Chocolatey, or Scoop install. Host approval surrounds the executing call.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "package_id": {"type": "string"},
                 "source": {"type": "string", "enum": ["winget", "chocolatey", "scoop"], "default": "winget"},
-                "execute": _bool_property("Actually execute the install command"),
-                "user_approved": _bool_property("Set only after the user accepts the host permission prompt"),
+                "execute": _bool_property("Execute the reviewed install plan"),
             },
             "required": ["package_id"],
         },
     },
     {
         "name": "sandbox_run",
-        "description": "Plan or execute a command through WSL, a project Dev Container, or Windows Sandbox. Auto-routing requires the isolation requirement that selects the boundary. Execution always goes through host approval.",
+        "description": "Plan or run a command through WSL, a project Dev Container, or Windows Sandbox using an explicit isolation requirement.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -139,23 +135,28 @@ TOOLS = [
                 "isolation_requirement": {
                     "type": "string",
                     "enum": ["linux_compatibility", "project_reproducibility", "untrusted_windows"],
-                    "description": "Required when environment=auto; selects the isolation mechanism by task semantics rather than tool availability"
                 },
-                "workspace_folder": {"type": "string", "description": "Workspace for dev-container/host context; defaults to the Claude project directory"},
-                "execute": _bool_property("Actually launch the routed command"),
-                "user_approved": _bool_property("Set only after the user accepts the host permission prompt"),
+                "workspace_folder": {"type": "string", "description": "Active project/workspace"},
+                "payload_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": [],
+                    "description": "Workspace-relative files/directories staged read-only into Windows Sandbox; required for auto untrusted_windows routing",
+                },
+                "execute": _bool_property("Launch the reviewed route"),
             },
             "required": ["command"],
         },
     },
     {
         "name": "ecosystem_scan",
-        "description": "Read-only inventory of VS Code extensions, MCP configuration, agent config files, Claude plugins, and optionally WinGet packages for /defrag.",
+        "description": "Inventory project agent/tool configuration; host-wide inventory is an explicit broader read.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "cwd": {"type": "string", "description": "Project directory to inspect; defaults to the Claude project directory"},
-                "include_packages": _bool_property("Also query winget list (slower)", False),
+                "cwd": {"type": "string"},
+                "include_host": _bool_property("Also inspect user-level agent/plugin/extension surfaces", False),
+                "include_packages": _bool_property("With include_host, also query WinGet package inventory", False),
             },
         },
     },
@@ -172,11 +173,13 @@ TOOLS = [
     },
     {
         "name": "mcp_audit",
-        "description": "Inspect MCP configuration files, report configured servers, duplicate names, and malformed entries without exposing environment secrets.",
+        "description": "Inspect project MCP configuration by default; host-level or arbitrary additional config reads are explicit broader reads.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "config_path": {"type": "string", "description": "Optional additional MCP JSON config file"}
+                "cwd": {"type": "string"},
+                "include_host": _bool_property("Also inspect supported user-level MCP config surfaces", False),
+                "config_path": {"type": "string", "description": "Optional explicitly requested additional MCP JSON config"},
             },
         },
     },
@@ -226,9 +229,13 @@ async def handle_env_inspect(args: dict[str, Any]) -> dict[str, Any]:
     try:
         from src.discovery.discovery import EnvironmentDiscovery
 
-        discovery = EnvironmentDiscovery(cache_enabled=True)
-        snapshot = discovery.discover(force_refresh=bool(args.get("force_refresh", False)))
-        return {"status": "ok", "snapshot": snapshot.to_dict()}
+        snapshot = EnvironmentDiscovery(cache_enabled=True, data_dir=DATA_DIR).discover(
+            force_refresh=bool(args.get("force_refresh", False))
+        )
+        return {
+            "status": "ok" if snapshot.success else "degraded",
+            "snapshot": snapshot.to_dict(),
+        }
     except Exception as exc:
         return {
             "status": "degraded",
@@ -258,14 +265,15 @@ async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
         for command in commands:
             path = shutil.which(command)
             if not path:
-                output[group][command] = {"available": False}
+                output[group][command] = {"available": False, "version": None}
                 continue
             probe = _run([command, "--version"], timeout=5)
-            first_line = (probe.get("stdout") or probe.get("stderr") or "unknown").strip().splitlines()
+            lines = (probe.get("stdout") or probe.get("stderr") or "").strip().splitlines()
             output[group][command] = {
                 "available": True,
                 "path": path,
-                "version": first_line[0] if first_line else "unknown",
+                "version": lines[0] if probe.get("succeeded") and lines else None,
+                "version_status": "known" if probe.get("succeeded") and lines else "unknown",
             }
     return output
 
@@ -277,7 +285,6 @@ async def handle_capability_run(args: dict[str, Any]) -> dict[str, Any]:
     return run_capability(
         str(args.get("capability", "")),
         execute=bool(args.get("execute", False)),
-        user_approved=bool(args.get("user_approved", False)),
         extra_args=args.get("extra_args") or [],
         cwd=str(cwd),
         timeout_seconds=int(args.get("timeout_seconds", 120)),
@@ -292,6 +299,10 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
     task = str(args.get("task", "")).strip()
     if not task:
         return {"status": "invalid_input", "error": "task is required"}
+    project, error = _resolve_dir(args.get("cwd"))
+    if error:
+        return {"status": "invalid_input", "error": error}
+    assert project is not None
     try:
         capabilities = load_capabilities()
     except CapabilityConfigError as exc:
@@ -316,47 +327,44 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
                 "available_tool": tool.name if tool else None,
             }
         )
-
     selected = candidates[0] if candidates and candidates[0]["score"] > 0 else None
-    project_dir = str(_default_project_dir())
     phases = [
         {
             "phase": "inspect",
             "entry": "Task and project boundary are known",
-            "action": "env_inspect and project-local read-only inspection",
-            "exit": "Relevant Windows/runtime/tool state is established",
+            "action": "Obtain only environment/project facts that can change the route",
+            "exit": "Relevant state is established or explicitly unknown",
             "safety_class": "read-only",
         },
         {
             "phase": "route",
-            "entry": "Environment state is available",
-            "action": f"Select capability {selected['capability']}" if selected else "Choose a capability or ordinary tool path from observed evidence",
-            "exit": "One executable route and its safety class are explicit",
+            "entry": "Discriminating state is available",
+            "action": f"Select capability {selected['capability']}" if selected else "Choose the smallest supported route from observed evidence",
+            "exit": "One executable route and its authority class are explicit",
             "safety_class": "read-only",
         },
         {
             "phase": "execute",
-            "entry": "Required host approval has been obtained when applicable",
-            "action": "capability_run(execute=true) or the task's explicitly authorized tool",
-            "exit": "The requested effect has an observed result",
+            "entry": "The concrete executing tool call is ready for host permission policy",
+            "action": "Execute the selected capability or explicitly authorized tool path",
+            "exit": "The action returns an observable result",
             "safety_class": selected["safety_class"] if selected else "approval-required",
         },
         {
             "phase": "verify",
             "entry": "Execution returned",
-            "action": "Run the narrowest relevant verification and inspect the changed surface",
-            "exit": "Success or failure is established on the actual effect surface",
-            "safety_class": "reversible",
+            "action": "Observe the narrow surface where the requested effect should exist",
+            "exit": "Success, failure, or unresolved state is established",
+            "safety_class": "read-only",
         },
     ]
     return {
         "status": "planned",
         "task": task,
-        "project_dir": project_dir,
+        "project_dir": str(project),
         "selected_candidate": selected,
         "candidate_capabilities": candidates,
         "phases": phases,
-        "note": "This MCP tool is deterministic. /windows-dev-agent:plan can add task-specific tradeoff reasoning before execution.",
     }
 
 
@@ -399,7 +407,6 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
     source = str(args.get("source", "winget"))
     if not _PACKAGE_ID.fullmatch(package_id):
         return {"status": "invalid_input", "error": "package_id contains unsupported characters"}
-
     commands = {
         "winget": ["winget", "install", "--id", package_id, "--exact", "--accept-package-agreements", "--accept-source-agreements"],
         "chocolatey": ["choco", "install", package_id, "-y"],
@@ -408,7 +415,6 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
     argv = commands.get(source)
     if argv is None:
         return {"status": "invalid_input", "error": f"Unsupported package source: {source}"}
-
     plan = {
         "status": "planned",
         "package_id": package_id,
@@ -416,24 +422,19 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
         "safety_class": "approval-required",
         "argv": argv,
         "command": command_display(argv),
-        "requires_user_approval": True,
+        "requires_host_approval": True,
     }
     if not bool(args.get("execute", False)):
         return plan
-    if not bool(args.get("user_approved", False)):
-        return {**plan, "status": "approval_required", "error": "Host approval is required before installation"}
     if not shutil.which(argv[0]):
-        return {**plan, "status": "unavailable", "error": f"{argv[0]} is not installed"}
-
-    # An installer can partially mutate host state even when it exits nonzero.
-    # Once execution begins, the pre-attempt environment snapshot is no longer
-    # authoritative for downstream decisions.
+        return {**plan, "status": "unavailable", "error": f"{argv[0]} is not installed", "execution_started": False}
     result = _run(argv, timeout=600)
     cache_invalidated = _invalidate_environment_cache()
     return {
         **plan,
         **result,
         "status": "completed" if result.get("succeeded") else "failed",
+        "execution_started": True,
         "environment_cache_invalidated": cache_invalidated,
     }
 
@@ -450,45 +451,73 @@ def _windows_sandbox_executable() -> Optional[str]:
     return None
 
 
-def _select_sandbox(
-    environment: str,
-    isolation_requirement: Optional[str],
-    workspace: Path,
-) -> tuple[Optional[str], Optional[str]]:
+def _select_sandbox(environment: str, isolation_requirement: Optional[str], workspace: Path) -> tuple[Optional[str], Optional[str]]:
     if environment != "auto":
         return environment, None
     if isolation_requirement is None:
         return None, "isolation_requirement is required when environment=auto"
-
     if isolation_requirement == "linux_compatibility":
-        if shutil.which("wsl") or shutil.which("wsl.exe"):
-            return "wsl", None
-        return None, "WSL is not available for linux_compatibility"
-
+        return ("wsl", None) if (shutil.which("wsl") or shutil.which("wsl.exe")) else (None, "WSL is not available for linux_compatibility")
     if isolation_requirement == "project_reproducibility":
         has_config = (workspace / ".devcontainer").exists() or (workspace / ".devcontainer.json").exists()
-        if shutil.which("devcontainer") and has_config:
-            return "dev_container", None
-        return None, "A configured Dev Container and devcontainer CLI are required for project_reproducibility"
-
+        return ("dev_container", None) if shutil.which("devcontainer") and has_config else (None, "A configured Dev Container and devcontainer CLI are required for project_reproducibility")
     if isolation_requirement == "untrusted_windows":
-        if _windows_sandbox_executable():
-            return "windows_sandbox", None
-        return None, "Windows Sandbox is not available for untrusted_windows containment"
-
+        return ("windows_sandbox", None) if _windows_sandbox_executable() else (None, "Windows Sandbox is not available for untrusted_windows containment")
     return None, f"Unsupported isolation requirement: {isolation_requirement}"
 
 
-def _prepare_windows_sandbox(command: str) -> tuple[Path, list[str]]:
+def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[Path, Path]]], Optional[str]]:
+    if value is None:
+        value = []
+    if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+        return None, "payload_paths must be a list of non-empty workspace-relative paths"
+    workspace = workspace.resolve()
+    sources: list[tuple[Path, Path]] = []
+    for raw in value:
+        rel = Path(raw)
+        if rel.is_absolute() or ".." in rel.parts:
+            return None, f"payload path must stay inside the workspace: {raw}"
+        source = (workspace / rel).resolve()
+        try:
+            source.relative_to(workspace)
+        except ValueError:
+            return None, f"payload path escapes the workspace: {raw}"
+        if not source.exists():
+            return None, f"payload path does not exist: {raw}"
+        candidates = [source]
+        if source.is_dir():
+            candidates.extend(source.rglob("*"))
+        if len(candidates) > 10000:
+            return None, f"payload tree is too large to stage safely: {raw}"
+        for candidate in candidates:
+            if candidate.is_symlink():
+                return None, f"payload contains a symbolic link: {candidate}"
+            try:
+                candidate.resolve().relative_to(workspace)
+            except ValueError:
+                return None, f"payload contains a path that escapes the workspace: {candidate}"
+        sources.append((source, rel))
+    return sources, None
+
+
+def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]]) -> tuple[Path, list[str]]:
     sandbox_exe = _windows_sandbox_executable()
     if not sandbox_exe:
         raise RuntimeError("Windows Sandbox is not available")
-
     temp_dir = Path(tempfile.mkdtemp(prefix="windows-dev-agent-sandbox-"))
+    payload_dir = temp_dir / "payload"
+    payload_dir.mkdir()
+    for source, rel in payloads:
+        destination = payload_dir / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            shutil.copy2(source, destination)
     script_path = temp_dir / "run.cmd"
     script_path.write_text(
         "@echo off\r\n"
-        "cd /d C:\\Users\\WDAGUtilityAccount\\Desktop\r\n"
+        "cd /d C:\\WDAShare\\payload\r\n"
         f"{command}\r\n"
         "set WDA_EXIT=%ERRORLEVEL%\r\n"
         "echo.\r\n"
@@ -497,18 +526,14 @@ def _prepare_windows_sandbox(command: str) -> tuple[Path, list[str]]:
         encoding="utf-8",
     )
     config_path = temp_dir / "run.wsb"
-    host_folder = xml_escape(str(temp_dir))
     config_path.write_text(
         "<Configuration>\n"
         "  <Networking>Disable</Networking>\n"
         "  <ClipboardRedirection>Disable</ClipboardRedirection>\n"
-        "  <MappedFolders>\n"
-        "    <MappedFolder>\n"
-        f"      <HostFolder>{host_folder}</HostFolder>\n"
-        "      <SandboxFolder>C:\\WDAShare</SandboxFolder>\n"
-        "      <ReadOnly>true</ReadOnly>\n"
-        "    </MappedFolder>\n"
-        "  </MappedFolders>\n"
+        "  <MappedFolders><MappedFolder>\n"
+        f"    <HostFolder>{xml_escape(str(temp_dir))}</HostFolder>\n"
+        "    <SandboxFolder>C:\\WDAShare</SandboxFolder><ReadOnly>true</ReadOnly>\n"
+        "  </MappedFolder></MappedFolders>\n"
         "  <LogonCommand><Command>cmd /d /s /c C:\\WDAShare\\run.cmd</Command></LogonCommand>\n"
         "</Configuration>\n",
         encoding="utf-8",
@@ -520,20 +545,14 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
     command = str(args.get("command", "")).strip()
     if not command:
         return {"status": "invalid_input", "error": "command is required"}
-
     workspace, cwd_error = _resolve_dir(args.get("workspace_folder"))
     if cwd_error:
         return {"status": "invalid_input", "error": cwd_error}
     assert workspace is not None
-
     requested_environment = str(args.get("environment", "auto"))
-    requirement_value = args.get("isolation_requirement")
-    isolation_requirement = str(requirement_value) if requirement_value is not None else None
-    environment, route_error = _select_sandbox(
-        requested_environment,
-        isolation_requirement,
-        workspace,
-    )
+    requirement = args.get("isolation_requirement")
+    isolation_requirement = str(requirement) if requirement is not None else None
+    environment, route_error = _select_sandbox(requested_environment, isolation_requirement, workspace)
     if route_error:
         return {
             "status": "invalid_input" if requested_environment == "auto" and isolation_requirement is None else "unavailable",
@@ -543,17 +562,24 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
         }
     assert environment is not None
 
+    payloads, payload_error = _payload_sources(workspace, args.get("payload_paths", []))
+    if payload_error:
+        return {"status": "invalid_input", "error": payload_error}
+    assert payloads is not None
+    if requested_environment == "auto" and isolation_requirement == "untrusted_windows" and not payloads:
+        return {"status": "invalid_input", "error": "payload_paths is required for auto untrusted_windows routing so the isolated workload exists inside Windows Sandbox"}
+
     if environment == "wsl":
         executable = shutil.which("wsl") or shutil.which("wsl.exe")
         if not executable:
             return {"status": "unavailable", "environment": environment, "error": "WSL is not available"}
-        argv = [executable, "--", "bash", "-lc", command]
+        argv = [executable, "--cd", str(workspace), "--", "sh", "-lc", command]
         launch_kind = "captured"
     elif environment == "dev_container":
         executable = shutil.which("devcontainer")
         if not executable:
             return {"status": "unavailable", "environment": environment, "error": "devcontainer CLI is not available"}
-        argv = [executable, "exec", "--workspace-folder", str(workspace), "bash", "-lc", command]
+        argv = [executable, "exec", "--workspace-folder", str(workspace), "sh", "-lc", command]
         launch_kind = "captured"
     elif environment == "windows_sandbox":
         executable = _windows_sandbox_executable()
@@ -569,21 +595,21 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
         "environment": environment,
         "isolation_requirement": isolation_requirement,
         "project_dir": str(workspace),
+        "payload_paths": [str(rel) for _, rel in payloads],
         "safety_class": "approval-required",
         "argv": argv,
         "command": command_display(argv),
         "launch_kind": launch_kind,
-        "requires_user_approval": True,
+        "requires_host_approval": True,
         "config_materialized_on_execute": environment == "windows_sandbox",
     }
     if not bool(args.get("execute", False)):
         return plan
-    if not bool(args.get("user_approved", False)):
-        return {**plan, "status": "approval_required", "error": "Host approval is required before sandbox launch"}
 
     if environment == "windows_sandbox":
+        config_path: Optional[Path] = None
         try:
-            config_path, launch_argv = _prepare_windows_sandbox(command)
+            config_path, launch_argv = _prepare_windows_sandbox(command, payloads)
             process = subprocess.Popen(
                 launch_argv,
                 cwd=str(workspace),
@@ -591,7 +617,10 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
                 shell=False,
             )
         except (OSError, RuntimeError) as exc:
-            return {**plan, "status": "failed", "error": str(exc)}
+            result = {**plan, "status": "failed", "error": str(exc), "execution_started": config_path is not None}
+            if config_path is not None:
+                result["cleanup_path"] = str(config_path.parent)
+            return result
         return {
             **plan,
             "status": "launched",
@@ -600,10 +629,16 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
             "pid": process.pid,
             "config_path": str(config_path),
             "cleanup_path": str(config_path.parent),
+            "execution_started": True,
         }
 
     result = _run(argv, cwd=workspace, timeout=600)
-    return {**plan, **result, "status": "completed" if result.get("succeeded") else "failed"}
+    return {
+        **plan,
+        **result,
+        "status": "completed" if result.get("succeeded") else "failed",
+        "execution_started": True,
+    }
 
 
 def _safe_json(path: Path) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -614,18 +649,15 @@ def _safe_json(path: Path) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     return (value, None) if isinstance(value, dict) else (None, "root JSON value is not an object")
 
 
-def _mcp_config_paths(project_dir: Path, extra: Optional[str] = None) -> list[Path]:
-    paths = [
-        project_dir / ".mcp.json",
-        Path.home() / ".claude.json",
-        project_dir / ".continue" / "config.json",
-    ]
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        paths.append(Path(appdata) / "Claude" / "claude_desktop_config.json")
+def _mcp_config_paths(project_dir: Path, *, include_host: bool = False, extra: Optional[str] = None) -> list[Path]:
+    paths = [project_dir / ".mcp.json", project_dir / ".continue" / "config.json"]
+    if include_host:
+        paths.append(Path.home() / ".claude.json")
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            paths.append(Path(appdata) / "Claude" / "claude_desktop_config.json")
     if extra:
         paths.append(Path(extra).expanduser().resolve())
-
     seen: set[Path] = set()
     result: list[Path] = []
     for path in paths:
@@ -642,7 +674,6 @@ def _summarize_mcp_file(path: Path) -> dict[str, Any]:
     servers = (data or {}).get("mcpServers", {})
     if not isinstance(servers, dict):
         return {"file": str(path), "error": "mcpServers is not an object", "servers": []}
-
     summary = []
     for name, spec in servers.items():
         if not isinstance(spec, dict):
@@ -666,9 +697,14 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
     if error:
         return {"status": "invalid_input", "error": error}
     assert project_dir is not None
+    include_host = bool(args.get("include_host", False))
+    include_packages = bool(args.get("include_packages", False))
+    if include_packages and not include_host:
+        return {"status": "invalid_input", "error": "include_packages requires include_host=true"}
 
     inventory: dict[str, Any] = {
         "project_root": str(project_dir),
+        "host_inventory_included": include_host,
         "vscode": {"recommended": [], "installed": []},
         "mcp": [],
         "agent_configs": [],
@@ -676,7 +712,6 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
         "packages": {"queried": False, "items": []},
         "warnings": [],
     }
-
     extensions_file = project_dir / ".vscode" / "extensions.json"
     if extensions_file.exists():
         data, json_error = _safe_json(extensions_file)
@@ -685,15 +720,7 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
         elif isinstance((data or {}).get("recommendations"), list):
             inventory["vscode"]["recommended"] = (data or {})["recommendations"]
 
-    code = shutil.which("code")
-    if code:
-        result = _run([code, "--list-extensions"], timeout=20)
-        if result.get("succeeded"):
-            inventory["vscode"]["installed"] = [line for line in result.get("stdout", "").splitlines() if line]
-        else:
-            inventory["warnings"].append("VS Code extension inventory failed")
-
-    for path in _mcp_config_paths(project_dir):
+    for path in _mcp_config_paths(project_dir, include_host=include_host):
         if path.exists():
             inventory["mcp"].append(_summarize_mcp_file(path))
 
@@ -701,37 +728,42 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
         project_dir / ".clinerules",
         project_dir / ".roo",
         project_dir / ".continue",
+        project_dir / ".agents",
         project_dir / ".github" / "copilot-instructions.md",
         project_dir / "CLAUDE.md",
     ]
     inventory["agent_configs"] = [str(path) for path in config_candidates if path.exists()]
 
-    plugin_dir = Path.home() / ".claude" / "plugins"
-    if plugin_dir.is_dir():
-        try:
-            inventory["claude_plugins"] = sorted(path.name for path in plugin_dir.iterdir())
-        except OSError as exc:
-            inventory["warnings"].append(f"Could not inspect Claude plugins: {exc}")
-
-    if bool(args.get("include_packages", False)):
-        inventory["packages"]["queried"] = True
-        winget = shutil.which("winget")
-        if winget:
-            result = _run(
-                [winget, "list", "--source", "winget", "--disable-interactivity"],
-                timeout=90,
-            )
+    if include_host:
+        code = shutil.which("code")
+        if code:
+            result = _run([code, "--list-extensions"], timeout=20)
             if result.get("succeeded"):
-                inventory["packages"]["items"] = result.get("stdout", "").splitlines()[:300]
+                inventory["vscode"]["installed"] = [line for line in result.get("stdout", "").splitlines() if line]
             else:
-                inventory["warnings"].append("winget list failed")
-        else:
-            inventory["warnings"].append("winget is not available")
+                inventory["warnings"].append("VS Code extension inventory failed")
+        plugin_dir = Path.home() / ".claude" / "plugins"
+        if plugin_dir.is_dir():
+            try:
+                inventory["claude_plugins"] = sorted(path.name for path in plugin_dir.iterdir())
+            except OSError as exc:
+                inventory["warnings"].append(f"Could not inspect Claude plugins: {exc}")
+        if include_packages:
+            inventory["packages"]["queried"] = True
+            winget = shutil.which("winget")
+            if winget:
+                result = _run([winget, "list", "--source", "winget", "--disable-interactivity"], timeout=90)
+                if result.get("succeeded"):
+                    inventory["packages"]["items"] = result.get("stdout", "").splitlines()[:300]
+                else:
+                    inventory["warnings"].append("winget list failed")
+            else:
+                inventory["warnings"].append("winget is not available")
 
     overlap_markers = ("cline", "roo", "continue", "copilot", "aider", "agent")
-    installed = inventory["vscode"]["installed"]
     inventory["overlap_hints"] = [
-        item for item in installed if any(marker in item.lower() for marker in overlap_markers)
+        item for item in inventory["vscode"]["installed"]
+        if any(marker in item.lower() for marker in overlap_markers)
     ]
     return {"status": "ok", "inventory": inventory}
 
@@ -754,13 +786,20 @@ async def handle_logs_query(args: dict[str, Any]) -> dict[str, Any]:
     events = _load_log_events()
     filter_name = str(args.get("filter", "all"))
     if filter_name == "failures":
-        events = [event for event in events if event.get("success") is False]
+        events = [
+            event for event in events
+            if event.get("execution_outcome") == "failed"
+            or ("execution_outcome" not in event and event.get("success") is False)
+        ]
     elif filter_name == "installs":
         events = [event for event in events if "package_install" in str(event.get("tool_name", ""))]
     elif filter_name == "sandbox":
         events = [event for event in events if "sandbox_run" in str(event.get("tool_name", ""))]
     elif filter_name == "approvals":
-        events = [event for event in events if event.get("permission_decision") == "ask"]
+        events = [
+            event for event in events
+            if event.get("permission_decision") not in {None, "host-default"}
+        ]
     last_n = max(1, min(int(args.get("last_n", 20)), 200))
     return {
         "events": events[-last_n:],
@@ -771,12 +810,15 @@ async def handle_logs_query(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def handle_mcp_audit(args: dict[str, Any]) -> dict[str, Any]:
-    project_dir = _default_project_dir()
+    project_dir, error = _resolve_dir(args.get("cwd"))
+    if error:
+        return {"status": "invalid_input", "error": error}
+    assert project_dir is not None
+    include_host = bool(args.get("include_host", False))
     configs = []
-    for path in _mcp_config_paths(project_dir, args.get("config_path")):
+    for path in _mcp_config_paths(project_dir, include_host=include_host, extra=args.get("config_path")):
         if path.exists():
             configs.append(_summarize_mcp_file(path))
-
     names: list[str] = []
     malformed = []
     for config in configs:
@@ -787,13 +829,13 @@ async def handle_mcp_audit(args: dict[str, Any]) -> dict[str, Any]:
             if not server.get("valid"):
                 malformed.append({"file": config["file"], "server": server.get("name"), "error": "missing command/url"})
     counts = {name: names.count(name) for name in set(names)}
-    duplicates = sorted(name for name, count in counts.items() if name and count > 1)
     return {
         "status": "ok" if not malformed else "issues_found",
         "project_dir": str(project_dir),
+        "host_inventory_included": include_host,
         "configs": configs,
         "server_count": len(names),
-        "duplicate_names": duplicates,
+        "duplicate_names": sorted(name for name, count in counts.items() if name and count > 1),
         "malformed": malformed,
     }
 
@@ -815,7 +857,6 @@ HANDLERS = {
 async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
     method = request.get("method", "")
     request_id = request.get("id")
-
     if method == "initialize":
         return {
             "jsonrpc": "2.0",
@@ -823,7 +864,7 @@ async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "windows-dev-agent", "version": "0.2.0"},
+                "serverInfo": {"name": "windows-dev-agent", "version": __version__},
             },
         }
     if method == "notifications/initialized":
@@ -838,31 +879,18 @@ async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
         tool_args = params.get("arguments") or {}
         handler = HANDLERS.get(tool_name)
         if handler is None:
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
-            }
+            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}}
         try:
             result = await handler(tool_args)
         except Exception as exc:
             logger.exception("Tool %s failed", tool_name)
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": -32000, "message": str(exc)},
-            }
+            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": str(exc)}}
         return {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {"content": [{"type": "text", "text": json.dumps(result, indent=2, default=str)}]},
         }
-
-    return {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "error": {"code": -32601, "message": f"Method not found: {method}"},
-    }
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": f"Method not found: {method}"}}
 
 
 def main_sync() -> int:
@@ -883,11 +911,7 @@ def main_sync() -> int:
                     raise ValueError("request must be a JSON object")
                 response = loop.run_until_complete(handle_request(request))
             except Exception as exc:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32700, "message": str(exc)},
-                }
+                response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(exc)}}
             if response is not None:
                 sys.stdout.write(json.dumps(response, default=str) + "\n")
                 sys.stdout.flush()
