@@ -86,8 +86,6 @@ class VirtualizationInfo:
             options.append("wsl")
         if self.has_sandbox():
             options.append("windows-sandbox")
-        if self.dev_drives:
-            options.append("dev-drive")
         return options
 
 
