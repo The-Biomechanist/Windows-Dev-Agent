@@ -202,14 +202,28 @@ def _run(argv: list[str], *, cwd: Optional[Path] = None, timeout: int = 30) -> d
             shell=False,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"succeeded": False, "error": str(exc), "argv": argv}
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "succeeded": False,
+            "error": str(exc),
+            "argv": argv,
+            "execution_started": True,
+            "timed_out": True,
+        }
+    except OSError as exc:
+        return {
+            "succeeded": False,
+            "error": str(exc),
+            "argv": argv,
+            "execution_started": False,
+        }
     return {
         "succeeded": result.returncode == 0,
         "returncode": result.returncode,
         "stdout": result.stdout[-8000:],
         "stderr": result.stderr[-4000:],
         "argv": argv,
+        "execution_started": True,
     }
 
 
@@ -433,12 +447,12 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
     if not shutil.which(argv[0]):
         return {**plan, "status": "unavailable", "error": f"{argv[0]} is not installed", "execution_started": False}
     result = _run(argv, timeout=600)
-    cache_invalidated = _invalidate_environment_cache()
+    execution_started = result.get("execution_started") is True
+    cache_invalidated = _invalidate_environment_cache() if execution_started else False
     return {
         **plan,
         **result,
         "status": "completed" if result.get("succeeded") else "failed",
-        "execution_started": True,
         "environment_cache_invalidated": cache_invalidated,
     }
 
@@ -684,7 +698,6 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
         **plan,
         **result,
         "status": "completed" if result.get("succeeded") else "failed",
-        "execution_started": True,
     }
 
 
