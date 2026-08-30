@@ -65,7 +65,7 @@ claude --plugin-dir .
 
 ### Codex / ChatGPT desktop
 
-The repository carries `.codex-plugin/plugin.json` plus `.agents/plugins/marketplace.json`. The published marketplace entry for a release is pinned to an immutable Git commit rather than treating a moving `main` branch as the identity of a fixed version.
+Canonical `main` carries `.codex-plugin/plugin.json` plus the release index at `.agents/plugins/marketplace.json`. Each published marketplace entry is pinned to an immutable Git commit rather than treating a moving `main` branch as the identity of a fixed version. The immutable plugin payload itself does not depend on carrying its own marketplace index.
 
 Codex installs plugin code into its cache, so project-scoped MCP tools require the current project directory explicitly. Runtime cache/audit state converges on `${CODEX_HOME:-~/.codex}/plugins/data/windows-dev-agent` rather than the installed plugin tree.
 
@@ -111,17 +111,15 @@ The Claude `PreToolUse` hook is tightening-only:
 - forbidden → `deny`;
 - it never returns `allow`.
 
-Project-local ecosystem/MCP inspection is a bounded read. User-level ecosystem inventory, user MCP config, or an arbitrary extra MCP config path requires approval.
+Project-local ecosystem/MCP inspection is classified separately from broader host reads, but Claude Code's own normal permission flow remains authoritative for both.
 
 ### Codex
 
-Codex uses native MCP approval modes. Always-bounded read tools can be `approve`; mutation-capable and potentially broader-read tools remain `prompt`.
+Codex uses native MCP approval modes. Always-bounded non-filesystem reads can be `approve`; mutation-capable and filesystem-inventory tools remain `prompt`.
 
-When Codex plugin hooks are trusted, `PermissionRequest` removes needless prompts only when the concrete request is still bounded:
+When Codex plugin hooks are trusted, `PermissionRequest` removes needless prompts only for the three plan-first MCP tools when `execute: false`. Executing calls receive no WDA allow decision and continue to normal Codex approval.
 
-- `execute: false` plan-first calls may be allowed;
-- project-only `ecosystem_scan` / `mcp_audit` may be allowed;
-- `execute: true`, `include_host: true`, or arbitrary `config_path` receives no WDA allow decision and continues to normal Codex approval.
+`ecosystem_scan` and `mcp_audit` remain on native Codex approval even for project-only requests. Their caller-supplied `cwd` is required, but the plugin cannot independently prove that an arbitrary supplied directory is the active Codex project, so it does not auto-approve those reads.
 
 `PreToolUse` may deny a known-forbidden action but never emulates Claude's `ask` result.
 
@@ -133,7 +131,7 @@ Availability fields are tri-state:
 - `false` — observed absent/disabled;
 - `null` — the probe did not establish the fact.
 
-The shipped PowerShell producer uses live-image optional-feature queries (`Get-WindowsOptionalFeature -Online`). Probe failures are recorded in `snapshot.errors` and make the snapshot degraded rather than silently becoming `false`.
+The shipped PowerShell producer uses live-image optional-feature queries (`Get-WindowsOptionalFeature -Online`). Probe failures are recorded in `snapshot.errors` and make the snapshot degraded rather than silently becoming `false`. Windows Sandbox is queried using its canonical `Containers-DisposableClientVM` optional-feature identity.
 
 The cache stores the same canonical representation returned to consumers; it is not a second serialization format. Cache TTL is five minutes, and package-install execution invalidates the cached snapshot even on a failed installer because partial mutation is possible.
 
@@ -159,7 +157,7 @@ WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by de
 
 A hostile Windows workload is not isolated merely because a Sandbox window launches. For `untrusted_windows`, supply workspace-relative `payload_paths` identifying the files/directories the inner command actually needs. The runtime:
 
-1. rejects absolute paths, `..` escapes, missing paths, symbolic-link escapes, and oversized trees;
+1. rejects absolute paths, `..` escapes, missing paths, symbolic-link escapes, and trees over 10,000 filesystem entries;
 2. stages the selected payload into a temporary bundle;
 3. maps only that generated bundle into Windows Sandbox, read-only;
 4. disables Sandbox networking and clipboard;
@@ -171,9 +169,9 @@ Planning does not materialize the bundle. An executing Sandbox call returns `lau
 
 `ecosystem_scan` starts project-local. Set `include_host:true` only when user-level extensions/plugins/MCP state can change the decision. `include_packages:true` is legal only with host inventory enabled.
 
-`mcp_audit` likewise starts from the project boundary. User-level MCP configuration and arbitrary `config_path` reads are explicit broader requests and remain on the host approval surface.
+`mcp_audit` likewise starts from the project boundary. User-level MCP configuration and arbitrary `config_path` reads are explicit broader requests.
 
-Returned MCP summaries omit environment values and do not expose secrets from the inspected config.
+Returned MCP summaries omit environment values and do not expose secrets from the inspected config. On Codex, all filesystem inventory reads remain on native approval because caller-supplied project identity cannot be independently authenticated by the plugin.
 
 ## Audit state and retention
 
@@ -185,7 +183,7 @@ For execution-capable calls, the audit representation distinguishes:
 - `failed` — result establishes failed execution;
 - `unknown` — execution/launch occurred but the available observation does not establish outcome;
 - `not_executed` — plan/block/unavailable/invalid input prevented execution;
-- `not_applicable` — the call has no execution phase.
+- `not_applicable` — the lifecycle event has no execution outcome to classify, including permission/control events.
 
 Codex PostToolUse may inspect the WDA MCP result **in memory** to derive that small status, then discards the raw response. A Windows Sandbox launch therefore remains `unknown`, never “zero failures.”
 
@@ -199,12 +197,13 @@ The current catalog covers Git inspection, Python/JavaScript linting, Python/.NE
 
 ## Verification
 
-GitHub Actions runs on `windows-latest` and checks:
+GitHub Actions runs on `windows-latest` across Python **3.9** and **3.13** and checks:
 
 1. Python runtime compilation;
 2. the contract-focused pytest suite;
 3. the **actual shipped PowerShell discovery producer** on the Windows runner;
-4. exact MCP initialization/version/tool surfaces for Claude and Codex.
+4. exact MCP initialization/version/tool surfaces for Claude and Codex;
+5. when the canonical release index is present, that its immutable SHA resolves to a Codex plugin manifest with the same published version.
 
 The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness, Sandbox payload staging and path containment, WSL project binding, audit outcome uncertainty/retention, host adapter wiring, and MCP transport isolation.
 
