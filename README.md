@@ -1,8 +1,8 @@
 # Windows Dev Agent
 
-A Windows-native Claude Code plugin for environment discovery, explicit workflow planning, safe capability routing, package/tool setup, isolation, and agent-ecosystem cleanup.
+A Windows-native Claude Code plugin for environment discovery, explicit workflow planning, safety-aware capability routing, package/tool setup, isolation, and agent-ecosystem cleanup.
 
-The project deliberately keeps the control plane Windows-native: PowerShell, WinGet, WMI/CIM, .NET/MSBuild, and Windows management surfaces come first. WSL, Dev Containers, and Windows Sandbox are used when the workload or isolation boundary actually calls for them.
+The control plane is Windows-native where Windows owns the problem: PowerShell, WinGet, WMI/CIM, .NET/MSBuild, and Windows management surfaces come first. WSL, Dev Containers, and Windows Sandbox are selected only when their actual execution boundary fits the task.
 
 ## Run locally
 
@@ -12,59 +12,68 @@ From a checkout of this repository:
 claude --plugin-dir .
 ```
 
-The runtime uses only the Python standard library. No `pip install` step is required for the plugin or its MCP server. The plugin manifest declares version **0.2.0** and uses Claude Code's current plugin manifest schema.
+The runtime uses only the Python standard library. No `pip install` step is required for the plugin or its MCP server.
 
 If you publish or install it through a configured Claude Code marketplace or APM registry, the package name is `windows-dev-agent`.
 
 ## Commands
 
 - `/windows-dev-agent:env` — inspect the Windows development environment.
-- `/windows-dev-agent:plan <task>` — build a structured execution plan before mutation.
-- `/windows-dev-agent:defrag` — inventory existing agent infrastructure, identify real capability overlap, and plan a reversible consolidation.
+- `/windows-dev-agent:plan <task>` — build a structured execution plan before consequential work.
+- `/windows-dev-agent:defrag` — inventory existing agent infrastructure, identify concrete overlap, and plan a reversible consolidation.
+
+## Runtime state boundaries
+
+The bundled `.mcp.json` keeps three identities separate:
+
+- `${CLAUDE_PLUGIN_ROOT}` — plugin code/config and the MCP server working directory;
+- `${CLAUDE_PLUGIN_DATA}` — persistent discovery cache and minimal audit metadata;
+- `${CLAUDE_PROJECT_DIR}` — the user's project and the default working directory for project-scoped capabilities, sandbox workspace, ecosystem scanning, and MCP auditing.
 
 ## MCP tools
 
-The bundled `.mcp.json` gives the server three distinct locations instead of conflating them:
-
-- `${CLAUDE_PLUGIN_ROOT}` — immutable-ish plugin code/config and the MCP server working directory;
-- `${CLAUDE_PLUGIN_DATA}` — persistent discovery cache and audit state that survives plugin updates;
-- `${CLAUDE_PROJECT_DIR}` — the user's project and the default working directory for project-scoped capabilities, sandbox workspace, ecosystem scanning, and MCP auditing.
-
 | Tool | Purpose |
 | --- | --- |
-| `env_inspect` | Native Windows environment snapshot with a degraded fallback when full discovery is unavailable. |
-| `tool_discover` | Discover common runtimes, editors, package managers, and VCS tools. |
-| `capability_run` | Plan or execute a named capability from `capabilities.yaml`. Configured commands are argv vectors, run with `shell=False`, and default to the Claude project directory. |
-| `workflow_plan` | Build a deterministic execution scaffold and rank relevant registered capabilities for a task. |
-| `package_install` | Plan or execute a WinGet, Chocolatey, or Scoop install through the approval gate. |
-| `sandbox_run` | Plan or run isolated commands through WSL, a Dev Container, or Windows Sandbox when available. |
-| `ecosystem_scan` | Read-only project/user inventory for `/defrag`: VS Code extensions, MCP configs, agent configs, Claude plugin directories, and optional WinGet inventory. |
-| `logs_query` | Query the redacted structured audit log in persistent plugin data. |
+| `env_inspect` | Native Windows environment snapshot with explicit `force_refresh` for stale-state-sensitive verification. |
+| `tool_discover` | Focused runtime/editor/package-manager/VCS discovery. |
+| `capability_run` | Plan or execute a named capability from `capabilities.yaml` using argv vectors and `shell=False`. |
+| `workflow_plan` | Build a deterministic capability-aware execution scaffold. |
+| `package_search` | Search an installed Windows package manager to resolve package identity before mutation. |
+| `package_install` | Plan or execute an exact WinGet, Chocolatey, or Scoop install through the host approval boundary. |
+| `sandbox_run` | Route through WSL, a project Dev Container, or Windows Sandbox using the task's explicit isolation requirement. |
+| `ecosystem_scan` | Read-only inventory for `/defrag`: VS Code extensions, MCP configs, agent configs, Claude plugin directories, and optional WinGet inventory. |
+| `logs_query` | Query minimal persistent Windows Dev Agent audit metadata across recorded sessions. |
 | `mcp_audit` | Inspect project/user MCP configs for configured servers, duplicate names, and malformed entries without exposing environment values. |
 
 ## Safety model
 
-Safety decisions are enforced at the **Claude Code host permission surface**, not by trusting the model to claim that approval happened.
+The plugin safety hook is **tightening-only** over Claude Code's native permission system. It never returns `permissionDecision: allow`, so it never grants execution that Claude Code would otherwise have prompted for or denied.
 
-The bundled `PreToolUse` hook reads Claude Code's JSON hook event on stdin and returns a structured decision:
+The `PreToolUse` hook covers Bash, Claude Code's native PowerShell tool, and executing Windows Dev Agent MCP mutation calls. Claude Code scopes tools from plugin-bundled MCP servers internally; the hook supports both that installed-plugin identity and the bare server identity used by direct/local execution.
 
-| Class | Host decision |
+| Effective class | Plugin decision |
 | --- | --- |
-| `read-only` | `allow` |
-| `reversible` | `allow` |
-| `approval-required` | `ask` — Claude Code prompts the user |
-| `checkpoint` | `ask` — Claude Code prompts the user |
+| `read-only` | no plugin decision — normal Claude Code permission flow remains authoritative |
+| `reversible` | no plugin decision — normal Claude Code permission flow remains authoritative |
+| `approval-required` | `ask` — force explicit host confirmation |
+| `checkpoint` | `ask` — force explicit host confirmation |
 | `forbidden` | `deny` |
 
-Unknown Bash commands default to **ask**, not allow. Package installation and sandbox launch are plan-first: `execute: false` returns the intended action without executing it; executing calls are forced through the host prompt. Approval-required capabilities such as PR publication are classified from the same capability catalog the MCP server uses.
+Additional guards:
 
-The MCP server also refuses forbidden capabilities and requires the executing request to acknowledge the approval boundary. That is defense in depth; the Claude Code hook is the human-confirmation authority when the server is used through this plugin.
+- unknown Bash or PowerShell commands ask rather than defaulting to a weaker classification;
+- compound, redirected, substituted, or dynamically invoked shell commands cannot inherit a read-only prefix classification;
+- caller-supplied `extra_args` cannot inherit a base capability's weaker safety class and instead require approval;
+- package installation and sandbox launch are plan-first;
+- the MCP server separately blocks forbidden capabilities and requires an acknowledgement before reversible or approval-required direct capability execution.
+
+The host permission system remains the human-confirmation authority. A model-provided `user_approved: true` value is not proof of permission and cannot bypass the plugin hook.
 
 ## Capability routing
 
-`capabilities.yaml` is intentionally small and executable rather than a catalog of aspirational stubs. To keep plugin startup self-contained, it uses the **JSON-compatible subset of YAML** and is parsed with Python's standard `json` module—no third-party YAML package is required.
+`capabilities.yaml` is deliberately small and executable. It uses the JSON-compatible subset of YAML so the installed runtime can parse it with Python's standard `json` module.
 
-It currently covers:
+The current catalog covers:
 
 - Git status inspection;
 - Python and JavaScript/TypeScript linting;
@@ -72,28 +81,40 @@ It currently covers:
 - .NET builds;
 - GitHub PR creation as an approval-required publication action.
 
-Tool commands are stored as argument arrays. Runtime execution appends extra arguments as separate argv entries and never interpolates them into a host-shell command.
+Configured commands are argv arrays. Base safety describes the configured request; if a caller appends additional arguments, the effective request is upgraded to approval-required instead of assuming the base classification still applies.
+
+Child processes launched by the MCP runtime, capability runner, and environment discovery receive `DEVNULL` stdin rather than inheriting the MCP server's stdio transport. An unexpectedly interactive child therefore cannot consume future JSON-RPC requests as prompt input.
+
+## Package identity and freshness
+
+A package mutation should not begin from a guessed ID. Use an exact ID supplied by the user or authoritative project/config state, or call `package_search` and resolve the matching candidate before `package_install`.
+
+WinGet search is noninteractive and does not auto-accept source agreements. If a source agreement prevents read-only discovery, that unresolved prerequisite is surfaced instead of being silently accepted by the search operation.
+
+Any executed package-install attempt invalidates the cached environment snapshot because an installer can partially mutate host state even when it exits nonzero. More generally, when a host mutation can change the state a later step consumes, verify with the narrowest fresh probe or call `env_inspect(force_refresh=true)` rather than treating a pre-mutation snapshot as current evidence.
 
 ## Isolation
 
-`sandbox_run` supports three concrete routes:
+`environment: auto` does **not** mean "first backend installed." It requires `isolation_requirement` and routes by the property the task needs:
 
-- **WSL** — captured execution through `wsl -- bash -lc ...`;
-- **Dev Container** — captured execution through the `devcontainer` CLI;
-- **Windows Sandbox** — on approved execution, generates a temporary `.wsb` bundle with networking and clipboard disabled, maps only the generated launch bundle read-only, and opens the sandbox interactively.
+- `linux_compatibility` → WSL;
+- `project_reproducibility` → a configured project Dev Container;
+- `untrusted_windows` → Windows Sandbox.
 
-A plan-only Windows Sandbox call does not materialize the bundle. Windows Sandbox launch is not treated as proof that the command inside succeeded. Hyper-V is not claimed as an implemented `sandbox_run` backend.
+WSL is an interoperable Linux environment and is not treated as hostile-Windows containment. Windows Sandbox plans do not materialize a bundle. On approved execution, the runtime creates a temporary `.wsb` bundle with networking and clipboard disabled, maps only that generated bundle read-only, and launches the sandbox interactively. A successful launch is not reported as proof that the command inside succeeded.
+
+Hyper-V is not claimed as an implemented `sandbox_run` backend.
 
 ## Audit trail
 
-Plugin hooks write a structured JSONL audit trail to `${CLAUDE_PLUGIN_DATA}/agent.log`, alongside the persistent environment-discovery cache:
+The plugin persists only metadata its audit surfaces consume. It does **not** retain arbitrary command bodies, tool inputs, stdout/stderr, or unrelated tool responses.
 
-- PreToolUse safety class and permission decision;
-- successful tool completions;
-- failed tool completions;
-- redaction of keys that look like tokens, passwords, secrets, credentials, cookies, or authorization values.
+- `PreToolUse` records safety classification and whether the plugin forced `ask`/`deny` or deferred to the host, with session/tool identity.
+- `PostToolUse` and `PostToolUseFailure` are scoped to Windows Dev Agent MCP operations and record minimal completion metadata.
+- the `Stop` hook reads its current `session_id` and reports only events from that session;
+- `logs_query` is explicitly a persistent-history surface and labels itself accordingly.
 
-The Stop hook reads the same persistent log and prints a concise session summary. This is a local structured audit log; the project does **not** claim external OpenTelemetry export.
+State lives under `${CLAUDE_PLUGIN_DATA}/agent.log`. This is a local structured audit log; the project does not claim external telemetry export.
 
 ## Architecture
 
@@ -110,30 +131,31 @@ Claude Code plugin layer
           src/mcp/server.py
           ├─ src/capabilities.py
           ├─ src/discovery/
-          ├─ src/execution/
           ├─ src/safety/
           ├─ src/observability/
-          └─ src/models/
+          └─ src/models/environment.py
 ```
 
-Earlier unused graph/workflow/schema scaffolding and tracked cache material were removed rather than preserved as architecture theater. Machine-local Claude permission settings are also excluded from the distribution.
+Disconnected execution, graph, workflow, and schema scaffolding is not kept merely because it once had tests.
 
 ## Requirements
 
 - Windows 10 or Windows 11 for full native behavior;
 - PowerShell 5.1+;
 - Python 3.9+;
-- a current Claude Code release that supports plugin MCP servers and structured `PreToolUse` permission decisions.
+- a current Claude Code release supporting plugin MCP servers, the PowerShell tool, and structured `PreToolUse` permission decisions.
 
 Some read-only/runtime tests are portable, but release verification runs on Windows.
 
 ## Verification
 
-GitHub Actions runs on `windows-latest` and checks:
+GitHub Actions on `windows-latest` checks:
 
-1. runtime compilation with `compileall`;
-2. the complete pytest suite;
-3. MCP initialization and the expected tool surface.
+1. runtime compilation;
+2. the pytest regression suite;
+3. MCP initialization and the exact expected tool surface.
+
+The regression suite is intended to discriminate the public contracts above: installed-plugin MCP naming, PowerShell/Bash permission routing, argument-dependent authority, package identity flow, cache freshness including failed attempts, isolation selection, audit ownership/session binding, transport isolation, and plan-versus-execute boundaries.
 
 For local development:
 
@@ -143,4 +165,4 @@ python -m compileall -q src
 python -m pytest tests -q
 ```
 
-A release claim should follow the observed CI result, not a commit message saying the project is complete.
+A green run supports only the behavior exercised by those tests; it is not evidence for unexecuted interactive host or sandbox outcomes.

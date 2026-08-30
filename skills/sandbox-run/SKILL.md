@@ -1,34 +1,35 @@
 ---
-description: Route command execution into WSL, a dev container, or Windows Sandbox through the sandbox_run MCP tool. Use when isolation is materially useful. Launching execution is always host approval-gated.
+description: Route command execution through WSL, a project Dev Container, or Windows Sandbox when that boundary materially fits the task. Launching execution is always host approval-gated.
 ---
 
 # Sandbox Run
 
-Use isolation because the workload benefits from it, not as ceremony. The implemented runtime supports **WSL**, **Dev Containers**, and **Windows Sandbox**.
+Choose the boundary from the task's required property, not from whichever backend happens to be installed first.
 
 ## Routing
 
-| Situation | Preferred route | Runtime behavior |
-| --- | --- | --- |
-| Linux-native command or lightweight isolated test | WSL | Runs `wsl -- bash -lc <command>` and captures the result. |
-| Reproducible project environment already using devcontainers | Dev Container | Runs through the `devcontainer` CLI and captures the result. |
-| Untrusted or installer-like Windows workload | Windows Sandbox | On execution, generates a read-only mapped `.wsb` launch bundle and opens Windows Sandbox interactively. |
+| Requirement | `isolation_requirement` | Auto route | Boundary |
+| --- | --- | --- | --- |
+| Linux-native compatibility or a low-risk Linux execution surface | `linux_compatibility` | WSL | Interoperable Linux environment; **not** hostile-code containment from the Windows host. |
+| Reproduce the project's declared devcontainer environment | `project_reproducibility` | Dev Container | Requires the `devcontainer` CLI and a project devcontainer configuration. |
+| Run an untrusted or installer-like Windows workload away from the host | `untrusted_windows` | Windows Sandbox | Disposable Windows VM boundary with networking and clipboard disabled by this runtime. |
 
-`environment: auto` chooses the first available route in this order: WSL, Dev Container, Windows Sandbox. Select an explicit environment when that ordering is not appropriate to the task.
+If the caller selects an explicit `environment`, the runtime respects that request but the reasoner still owns checking that the chosen environment satisfies the task. `environment: auto` is legal only when `isolation_requirement` is supplied; the runtime will not infer isolation semantics from backend availability.
 
 ## Procedure
 
-1. Inspect relevant isolation availability with `env_inspect` when it is not already known.
-2. Call `sandbox_run` with `execute: false` and inspect the selected environment and launch plan. Planning does not launch the workload or materialize a Windows Sandbox bundle.
-3. If the selected route does not fit the task, choose an explicit supported environment or report the missing prerequisite.
-4. To launch, call `sandbox_run` with `execute: true` and `user_approved: true`. The bundled PreToolUse hook still returns `permissionDecision: ask`; execution occurs only if the user accepts the host prompt.
-5. For WSL and Dev Container runs, evaluate the captured return code/stdout/stderr. For Windows Sandbox, report only that the interactive sandbox was launched; do not claim the command succeeded without an observation from inside that sandbox.
-6. Executed Windows Sandbox launches return the temporary config/cleanup path. Remove that temporary bundle only after the sandbox no longer needs it.
+1. Establish the property the boundary must provide. If it is not clear whether the need is Linux compatibility, project reproducibility, or untrusted-Windows containment, do not silently substitute one for another.
+2. Inspect relevant backend availability with `env_inspect` when it is not already known.
+3. Call `sandbox_run` with `execute: false`, using either an explicit environment or `environment: auto` plus the resolved `isolation_requirement`. Inspect the selected route and launch plan. Planning must not launch the workload or materialize a Windows Sandbox bundle.
+4. If the selected route cannot satisfy the requirement, report the missing prerequisite or deliberately choose a different explicit boundary whose tradeoff is acceptable. Never fall back to the host merely because isolation is unavailable.
+5. To launch, call `sandbox_run` with `execute: true` and `user_approved: true`. The bundled `PreToolUse` hook still returns `permissionDecision: ask`; execution occurs only if the user accepts the host prompt.
+6. For WSL and Dev Container runs, evaluate the captured return code/stdout/stderr only for what they establish. For Windows Sandbox, report only that the interactive sandbox was launched; do not claim the command inside succeeded without an observation from that sandbox.
+7. Executed Windows Sandbox launches return the temporary config/cleanup path. Remove that temporary bundle only after the sandbox no longer needs it.
 
 ## Safety and scope
 
 - Sandbox execution is `approval-required` even when the command itself looks harmless.
-- Do not silently fall back from a requested isolation environment to host execution.
+- WSL interoperability is not a substitute for Windows Sandbox when the required property is hostile-Windows containment.
 - Do not describe Hyper-V execution as supported by `sandbox_run`; Hyper-V remains an external/manual route.
 - Do not map arbitrary host folders writable into Windows Sandbox. The generated runtime bundle is mapped read-only.
 - Isolation does not establish semantic correctness. Verify the task result separately.

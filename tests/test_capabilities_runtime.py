@@ -1,4 +1,4 @@
-"""Tests for the small runtime capability registry."""
+"""Contract tests for the executable capability registry."""
 
 import json
 from pathlib import Path
@@ -6,7 +6,13 @@ import sys
 
 import pytest
 
-from src.capabilities import CapabilityConfigError, load_capabilities, run_capability
+from src import capabilities
+from src.capabilities import (
+    CapabilityConfigError,
+    effective_safety,
+    load_capabilities,
+    run_capability,
+)
 
 
 def _write_catalog(path: Path, safety: str = "reversible") -> None:
@@ -57,7 +63,21 @@ def test_plan_does_not_execute(tmp_path: Path):
     _write_catalog(catalog)
     result = run_capability("probe", execute=False, path=catalog)
     assert result["status"] == "planned"
+    assert result["safety_class"] == "reversible"
+    assert result["requires_user_approval"] is True
     assert "stdout" not in result
+
+
+def test_reversible_capability_needs_acknowledgement_even_directly(tmp_path: Path):
+    catalog = tmp_path / "capabilities.yaml"
+    _write_catalog(catalog, "reversible")
+    blocked = run_capability("probe", execute=True, user_approved=False, path=catalog)
+    assert blocked["status"] == "approval_required"
+    assert "stdout" not in blocked
+
+    completed = run_capability("probe", execute=True, user_approved=True, path=catalog)
+    assert completed["status"] == "completed"
+    assert "runtime-ok" in completed["stdout"]
 
 
 def test_approval_capability_needs_acknowledgement(tmp_path: Path):
@@ -68,7 +88,57 @@ def test_approval_capability_needs_acknowledgement(tmp_path: Path):
 
     completed = run_capability("probe", execute=True, user_approved=True, path=catalog)
     assert completed["status"] == "completed"
-    assert "runtime-ok" in completed["stdout"]
+
+
+def test_extra_args_upgrade_effective_safety(tmp_path: Path):
+    catalog = tmp_path / "capabilities.yaml"
+    _write_catalog(catalog, "reversible")
+    capability = load_capabilities(catalog)["probe"]
+    assert effective_safety(capability, []) == "reversible"
+    assert effective_safety(capability, ["--fix"]) == "approval-required"
+
+    plan = run_capability("probe", execute=False, extra_args=["--fix"], path=catalog)
+    assert plan["base_safety_class"] == "reversible"
+    assert plan["safety_class"] == "approval-required"
+    assert plan["requires_user_approval"] is True
+
+    blocked = run_capability(
+        "probe",
+        execute=True,
+        user_approved=False,
+        extra_args=["--fix"],
+        path=catalog,
+    )
+    assert blocked["status"] == "approval_required"
+
+
+def test_read_only_capability_with_extra_args_is_not_silently_read_only(tmp_path: Path):
+    catalog = tmp_path / "capabilities.yaml"
+    _write_catalog(catalog, "read-only")
+    plan = run_capability("probe", execute=False, extra_args=["--anything"], path=catalog)
+    assert plan["base_safety_class"] == "read-only"
+    assert plan["safety_class"] == "approval-required"
+
+
+def test_capability_subprocess_cannot_consume_mcp_stdin(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.yaml"
+    _write_catalog(catalog, "read-only")
+    observed = {}
+
+    class Result:
+        returncode = 0
+        stdout = "runtime-ok\n"
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        observed["argv"] = argv
+        observed.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr(capabilities.subprocess, "run", fake_run)
+    result = run_capability("probe", execute=True, path=catalog)
+    assert result["status"] == "completed"
+    assert observed["stdin"] is capabilities.subprocess.DEVNULL
 
 
 def test_forbidden_capability_never_executes(tmp_path: Path):

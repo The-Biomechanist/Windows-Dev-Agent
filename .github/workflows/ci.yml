@@ -27,10 +27,23 @@ jobs:
           @'
           import asyncio
           from src.mcp.server import handle_request
+
+          expected = [
+              "env_inspect",
+              "tool_discover",
+              "capability_run",
+              "workflow_plan",
+              "package_search",
+              "package_install",
+              "sandbox_run",
+              "ecosystem_scan",
+              "logs_query",
+              "mcp_audit",
+          ]
           init = asyncio.run(handle_request({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}))
           assert init["result"]["serverInfo"]["name"] == "windows-dev-agent"
           tools = asyncio.run(handle_request({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
           names = [tool["name"] for tool in tools["result"]["tools"]]
-          assert len(names) == 9, names
+          assert names == expected, names
           print("MCP preflight OK:", ", ".join(names))
           '@ | python -

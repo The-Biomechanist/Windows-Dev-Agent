@@ -9,10 +9,10 @@ description: Bootstrap or repair a Windows development environment when runtimes
 1. **Inspect current state first.** Use `env_inspect` and project requirements. Do not reinstall tools merely because the user mentioned them.
 2. **Locate the earliest missing or broken prerequisite.** Distinguish runtime absence, PATH/session propagation, version mismatch, package-manager failure, project dependency failure, and Windows feature state.
 3. **Choose the native repair.** Prefer the smallest Windows-owned change that repairs that prerequisite. Do not turn a local project problem into a machine-wide setup rewrite.
-4. **For system package installation, use `package_install`.** Call it with `execute: false` first to expose the exact source and argv. Executing calls are approval-required and are independently forced through the Claude Code host prompt.
-5. **For Windows optional features**, use an explicitly approved PowerShell action only when the feature is actually required. WSL, Windows Sandbox, and Hyper-V are OS features, not ordinary package installs.
-6. **For project dependencies**, switch to the project's own package manager only after the required runtime/toolchain is established. Preserve lockfiles and project conventions.
-7. **Verify the repaired joint.** Re-run the narrow version, availability, build, or project check that can establish the requested state. Use `env_inspect` again only when a full environment refresh is relevant.
+4. **For system packages, resolve identity before install.** Preserve an exact ID supplied by the user or authoritative project/config state. Otherwise call `package_search`, inspect the candidates, then call `package_install` with `execute: false` for the resolved ID. Executing calls are approval-required and independently forced through the Claude Code host prompt.
+5. **For Windows optional features**, use an explicitly approved PowerShell action only when the feature is actually required. WSL, Windows Sandbox, and Hyper-V are OS features, not ordinary package installs. PowerShell mutations cross the plugin's `PreToolUse` safety gate.
+6. **For project dependencies**, switch to the project's own package manager only after the required runtime/toolchain is established. Preserve lockfiles and project conventions. Project-code/build/test execution follows the ordinary host permission path rather than being auto-approved merely because the launcher is familiar.
+7. **Verify the repaired joint with fresh state.** Prefer the narrow version, availability, build, or project check that can establish the requested post-state. If full `env_inspect` is the right witness after a host mutation, use `force_refresh: true`; do not reuse a pre-mutation cached snapshot as proof of repair.
 
 ## Rules
 
