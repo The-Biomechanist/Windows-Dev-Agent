@@ -1,8 +1,8 @@
 """Minimal Codex PostToolUse audit adapter.
 
-Codex PostToolUse fires after tool completion but does not provide the same
-success/failure event split as Claude Code. Keep execution success unknown
-rather than deriving it from event arrival, and persist no raw tool payloads.
+Codex PostToolUse fires after tool completion but does not provide Claude Code's
+success/failure event split. Keep execution success unknown and persist no raw
+tool payloads.
 """
 
 from __future__ import annotations
@@ -15,8 +15,10 @@ from typing import Any
 
 try:
     from .trace import append_event, resolve_log_file
+    from ..runtime_paths import resolve_codex_data_dir
 except ImportError:
     from trace import append_event, resolve_log_file
+    from src.runtime_paths import resolve_codex_data_dir
 
 
 def event_from_hook(payload: dict[str, Any]) -> dict[str, Any]:
@@ -40,7 +42,12 @@ def main() -> int:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
             raise ValueError("hook payload must be a JSON object")
-        append_event(event_from_hook(payload), resolve_log_file(args.data_dir))
+        log_file = (
+            resolve_log_file(args.data_dir)
+            if args.data_dir
+            else resolve_log_file(str(resolve_codex_data_dir()))
+        )
+        append_event(event_from_hook(payload), log_file)
     except Exception as exc:
         print(f"windows-dev-agent codex trace warning: {exc}", file=sys.stderr)
     return 0
