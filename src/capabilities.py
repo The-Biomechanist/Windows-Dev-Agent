@@ -18,7 +18,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, Iterable, Mapping, Optional
 
-from src.execution import resolve_executable, run_bounded
+from src.execution import executable_identity_matches, resolve_executable, run_bounded
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CAPABILITIES_FILE = ROOT / "capabilities.json"
@@ -163,6 +163,7 @@ def run_capability(
     extra_args: Optional[list[str]] = None,
     cwd: Optional[str] = None,
     timeout_seconds: int = 120,
+    expected_executable: Optional[str] = None,
     path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Plan or execute a configured capability under host-owned approval."""
@@ -198,6 +199,7 @@ def run_capability(
         "base_safety_class": capability.safety,
         "safety_class": safety_class,
         "tool": tool.name,
+        "executable": tool.argv[0],
         "argv": argv,
         "command": command_display(argv),
         "requires_host_approval": safety_class in {"reversible", "approval-required"},
@@ -206,13 +208,27 @@ def run_capability(
     if not execute:
         return plan
     if safety_class == "forbidden":
-        return {**plan, "status": "blocked", "error": "Capability is forbidden"}
+        return {**plan, "status": "blocked", "error": "Capability is forbidden", "execution_started": False}
+    if not isinstance(expected_executable, str) or not expected_executable.strip():
+        return {
+            **plan,
+            "status": "invalid_input",
+            "error": "expected_executable from the reviewed plan is required for execution",
+            "execution_started": False,
+        }
+    if not executable_identity_matches(expected_executable, tool.argv[0]):
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "Resolved executable no longer matches the reviewed plan; obtain a fresh plan before execution",
+            "execution_started": False,
+        }
 
     run_cwd: Optional[Path] = None
     if cwd:
         run_cwd = Path(cwd).expanduser().resolve()
         if not run_cwd.is_dir():
-            return {**plan, "status": "invalid_input", "error": f"cwd is not a directory: {run_cwd}"}
+            return {**plan, "status": "invalid_input", "error": f"cwd is not a directory: {run_cwd}", "execution_started": False}
 
     result = run_bounded(
         argv,
