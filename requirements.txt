@@ -1,1 +1,1 @@
-PyYAML>=6.0,<7
+# No third-party runtime dependencies.
