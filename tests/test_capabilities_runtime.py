@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -107,6 +108,34 @@ def test_capability_subprocess_cannot_consume_mcp_stdin(tmp_path: Path, monkeypa
     result = run_capability("probe", execute=True, path=catalog)
     assert result["status"] == "completed"
     assert observed["stdin"] is capabilities.subprocess.DEVNULL
+
+
+def test_oserror_before_process_start_is_not_reported_as_executed(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.yaml"
+    _write_catalog(catalog, "read-only")
+    monkeypatch.setattr(
+        capabilities.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("launch failed")),
+    )
+    result = run_capability("probe", execute=True, path=catalog)
+    assert result["status"] == "failed"
+    assert result["execution_started"] is False
+    assert "timed_out" not in result
+
+
+def test_timeout_preserves_started_but_unfinished_execution_state(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.yaml"
+    _write_catalog(catalog, "read-only")
+    monkeypatch.setattr(
+        capabilities.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired(["probe"], 1)),
+    )
+    result = run_capability("probe", execute=True, path=catalog)
+    assert result["status"] == "failed"
+    assert result["execution_started"] is True
+    assert result["timed_out"] is True
 
 
 def test_forbidden_capability_never_executes(tmp_path: Path):

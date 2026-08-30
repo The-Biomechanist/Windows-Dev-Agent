@@ -232,8 +232,21 @@ def run_capability(
             shell=False,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {**plan, "status": "failed", "error": str(exc), "execution_started": True}
+    except subprocess.TimeoutExpired as exc:
+        return {
+            **plan,
+            "status": "failed",
+            "error": str(exc),
+            "execution_started": True,
+            "timed_out": True,
+        }
+    except OSError as exc:
+        return {
+            **plan,
+            "status": "failed",
+            "error": str(exc),
+            "execution_started": False,
+        }
 
     return {
         **plan,
