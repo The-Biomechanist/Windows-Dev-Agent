@@ -1,9 +1,11 @@
 """Focused contracts for execution-outcome attribution from MCP tool evidence."""
 
+from typing import Optional
+
 from src.observability import trace
 
 
-def _hook(tool_name: str, tool_input: dict, result_text: str | None, event: str = "PostToolUse"):
+def _hook(tool_name: str, tool_input: dict, result_text: Optional[str], event: str = "PostToolUse"):
     response = None
     if result_text is not None:
         response = {"content": [{"type": "text", "text": result_text}]}
