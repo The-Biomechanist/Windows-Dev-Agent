@@ -1,6 +1,6 @@
 """Permission lifecycle events are control evidence, not execution outcomes."""
 
-from src.safety import codex_gate, codex_permission, gate
+from src.safety import claude_gate, codex_gate, codex_permission
 
 
 CODEX_PREFIX = "mcp__windows_dev_agent__"
@@ -14,8 +14,8 @@ def _capture(module, monkeypatch):
 
 
 def test_claude_pretool_event_is_not_an_execution_attempt(monkeypatch):
-    events = _capture(gate, monkeypatch)
-    gate.evaluate_hook_event(
+    events = _capture(claude_gate, monkeypatch)
+    claude_gate.evaluate_hook_event(
         {
             "tool_name": CLAUDE_PREFIX + "package_install",
             "tool_input": {"package_id": "Python.Python.3.12", "execute": True},
