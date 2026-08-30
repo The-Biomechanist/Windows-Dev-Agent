@@ -113,6 +113,27 @@ def test_package_search_is_read_only_and_does_not_accept_source_agreements(monke
     assert "--accept-source-agreements" not in observed["argv"]
 
 
+def test_winget_install_plan_preserves_source_binding():
+    plan = run(
+        server.handle_package_install(
+            {"package_id": "Python.Python.3.12", "source": "winget"}
+        )
+    )
+    assert plan["status"] == "planned"
+    assert plan["source"] == "winget"
+    assert plan["argv"] == [
+        "winget",
+        "install",
+        "--id",
+        "Python.Python.3.12",
+        "--exact",
+        "--source",
+        "winget",
+        "--accept-package-agreements",
+        "--accept-source-agreements",
+    ]
+
+
 def test_package_install_plan_and_execute_share_one_host_authority_boundary(tmp_path: Path, monkeypatch):
     plan = run(server.handle_package_install({"package_id": "Python.Python.3.12"}))
     assert plan["status"] == "planned"
