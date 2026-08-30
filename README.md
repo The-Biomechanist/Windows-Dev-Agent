@@ -31,7 +31,7 @@ Six shared skills provide the procedural layer: `env-inspect`, `workflow-plan`, 
 - Windows PowerShell 5.1 or newer.
 - **Python 3.11 or newer.** WDA does not install Python for itself.
 - A current Claude Code or Codex build with plugin/MCP support.
-- Optional backends only when you use them: WSL, the Dev Container CLI plus project configuration, or Windows Sandbox.
+- Optional backends only when you use them: WSL, the Dev Container CLI plus an actual `.devcontainer/devcontainer.json` or root `.devcontainer.json`, or Windows Sandbox.
 
 There are no third-party Python runtime dependencies. Development uses pytest.
 
@@ -75,14 +75,17 @@ The launcher then imports only the requested `src.*` WDA entrypoint from the plu
 WDA does not accept a model-supplied `user_approved` bit.
 
 ```text
-agent constructs exact call
+agent obtains/reviews concrete plan where required
+→ plan-first execution echoes the reviewed executable as expected_executable
 → Claude Code or Codex applies host permission policy
 → permitted call reaches WDA
-→ WDA validates the request again at execution boundary
+→ WDA validates arguments and executable identity at execution boundary
 → external result is observed separately from the request
 ```
 
-`execute: false` produces a plan. `execute: true` asks the active host to permit the exact execution request. The runtime independently blocks forbidden capability classes and rejects malformed direct MCP calls even when a client skipped advertised JSON-schema validation.
+`execute: false` produces a plan. For `capability_run`, `package_install`, and `sandbox_run`, that plan includes the resolved absolute `executable`. A later `execute: true` call must echo that exact value as `expected_executable`. If current resolution no longer identifies the same live absolute file, WDA returns `stale_plan` with `execution_started: false`; the caller must obtain a fresh plan rather than silently accepting the changed identity.
+
+`expected_executable` is a stale-plan/identity precondition, **not** an approval token. The active host still decides whether the exact executing call is permitted. The runtime independently blocks forbidden capability classes and rejects malformed direct MCP calls even when a client skipped advertised JSON-schema validation.
 
 Claude's `PreToolUse` adapter can tighten the host decision (`ask` or `deny`) but never grants permission itself. Codex uses its native approval modes; trusted hooks may remove a prompt only for narrowly proven plan-only calls. Sandbox planning is intentionally not auto-allowed.
 
@@ -91,6 +94,8 @@ Claude's `PreToolUse` adapter can tighten the host decision (`ask` or `deny`) bu
 Claude project-scoped tools are restricted to `${CLAUDE_PROJECT_DIR}` or a descendant. Codex requires the current absolute project directory explicitly because installed plugin code lives in a separate cache.
 
 Project-local configuration reads—including `.mcp.json`, `.continue/config.json`, `.vscode/extensions.json`, agent configuration markers, and Dev Container configuration detection—are checked component-by-component before use. A symbolic link or NTFS reparse point that would redirect a project-scoped read outside the intended tree is rejected rather than followed.
+
+Project reproducibility requires an actual `.devcontainer/devcontainer.json` or root `.devcontainer.json`. A bare `.devcontainer/` directory is not treated as evidence that the project has a configured Dev Container.
 
 MCP audit results contain structural metadata only. Raw command strings, URLs, argument values, and environment values are not returned.
 
@@ -108,9 +113,9 @@ The cache uses the same canonical snapshot representation, is capped at 1 MiB, w
 
 ## Package execution
 
-WDA resolves the selected package-manager executable once and executes that exact absolute identity. It does not verify one path and then perform a second PATH lookup at execution time.
+WDA resolves the selected package-manager executable into an absolute identity for the plan. `package_install(execute:false)` returns that `executable` with the exact argv for review. An executing call must pass it back as `expected_executable`; WDA re-resolves the current package-manager identity and refuses to launch with `stale_plan` if it no longer matches. After that check, the already-established current absolute path is the one passed to the bounded runner—there is no third PATH lookup at launch.
 
-`package_search` can contact the package manager's configured source and therefore remains host-controlled even though it is non-mutating by intent. `package_install(execute:false)` returns the exact argv for review; `execute:true` requests that same operation under host approval. WinGet installation is bound to the `winget` source and runs non-interactively.
+`package_search` can contact the package manager's configured source and therefore remains host-controlled even though it is non-mutating by intent. WinGet installation is bound to the `winget` source and runs non-interactively.
 
 Installer exit status is not proof that the requested development task now works. Re-inspect or verify the actual post-state that matters.
 
@@ -125,6 +130,8 @@ All captured subprocess execution goes through one bounded runner. It:
 - preserves whether execution actually started;
 - attempts process-tree termination on Windows after timeout.
 
+For plan-first execution, executable identity is checked before mutation/staging/launch. A stale reviewed plan is `not_executed`, not an execution failure.
+
 Timeout after launch is not treated as proof of failure-with-no-effect: partial external mutation may already have occurred, so audit state can remain `unknown`.
 
 ## Isolation
@@ -137,7 +144,7 @@ Every `sandbox_run` call names the property it requires:
 | `project_reproducibility` | configured project Dev Container |
 | `untrusted_windows` | Windows Sandbox |
 
-`environment:auto` chooses the backend dictated by that property. If the caller names an explicit backend that does not satisfy the requirement, WDA rejects the request instead of silently weakening the boundary.
+`environment:auto` chooses the backend dictated by that property. If the caller names an explicit backend that does not satisfy the requirement, WDA rejects the request instead of silently weakening the boundary. `sandbox_run(execute:false)` also returns the absolute backend `executable`; execution must echo it as `expected_executable` so a changed backend identity invalidates the plan before staging or launch.
 
 ### Windows Sandbox
 
@@ -160,11 +167,13 @@ A returned `launched` status proves only that Windows Sandbox was launched. It d
 
 ## Audit and privacy
 
-WDA persists only the metadata needed by its audit consumers. It does **not** retain raw commands, MCP arguments, stdout/stderr, or arbitrary tool responses.
+WDA persists only bounded control metadata needed by its audit/cache consumers plus WDA-owned temporary Sandbox staging. It does **not** retain raw commands, MCP arguments, stdout/stderr, or arbitrary tool responses in the audit log.
+
+Persistent control files can include the environment snapshot, small cache generation/lock metadata, the bounded audit log plus its lock/rotated predecessor, and temporary Sandbox bundles awaiting best-effort or stale cleanup.
 
 New audit records carry a schema version plus explicit lifecycle fields. Legacy retained records remain readable. Rotate-and-append is serialized between independent Windows hook processes so concurrent Claude/Codex hooks cannot race log rotation.
 
-Execution outcomes distinguish `succeeded`, `failed`, `unknown`, `not_executed`, and `not_applicable`. Lifecycle success and external-effect success are separate facts.
+Execution outcomes distinguish `succeeded`, `failed`, `unknown`, `not_executed`, and `not_applicable`. Lifecycle success and external-effect success are separate facts. A rejected `stale_plan` is recorded as `not_executed`.
 
 `agent.log` is bounded to 2 MiB plus one rotated predecessor. `logs_query` returns audit events and counts without exposing the physical user-home/plugin-data path.
 
