@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -32,13 +33,18 @@ def test_codex_manifest_points_to_shared_root_components_and_version():
     assert manifest["hooks"] == "./hooks/codex-hooks.json"
 
 
-def test_repo_marketplace_is_git_backed_root_plugin_source():
-    market = json.loads((ROOT / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
+def test_marketplace_index_when_present_is_immutable_distribution_metadata():
+    path = ROOT / ".agents" / "plugins" / "marketplace.json"
+    if not path.exists():
+        return
+    market = json.loads(path.read_text(encoding="utf-8"))
     plugin = market["plugins"][0]
+    source = plugin["source"]
     assert plugin["name"] == "windows-dev-agent"
-    assert plugin["source"]["source"] == "url"
-    assert plugin["source"]["url"].endswith("/The-Biomechanist/Windows-Dev-Agent.git")
-    assert "path" not in plugin["source"]
+    assert source["source"] == "url"
+    assert source["url"].endswith("/The-Biomechanist/Windows-Dev-Agent.git")
+    assert re.fullmatch(r"[0-9a-f]{40}", source["sha"])
+    assert "ref" not in source and "path" not in source
 
 
 def test_codex_mcp_uses_callable_namespace_and_bounded_read_policy():
