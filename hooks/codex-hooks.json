@@ -1,5 +1,5 @@
 {
-  "description": "Codex host hooks for Windows Dev Agent. Permission prompting remains Codex-owned; PreToolUse only blocks forbidden actions.",
+  "description": "Codex host hooks for Windows Dev Agent. Codex owns permission prompting; plugin hooks deny forbidden actions and auto-approve only plan-only requests after Codex asks.",
   "hooks": {
     "PreToolUse": [
       {
@@ -11,6 +11,20 @@
             "commandWindows": "python \"${PLUGIN_ROOT}/src/safety/codex_gate.py\" --data-dir \"${PLUGIN_DATA}\"",
             "timeout": 30,
             "description": "Deny forbidden Windows Dev Agent actions and otherwise defer to Codex permissions"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "^mcp__windows_dev_agent__(capability_run|package_install|sandbox_run)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "commandWindows": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\" --data-dir \"${PLUGIN_DATA}\"",
+            "timeout": 30,
+            "description": "Allow plan-only calls; defer executing calls to the normal Codex approval prompt"
           }
         ]
       }
