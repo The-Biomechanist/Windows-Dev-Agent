@@ -11,9 +11,9 @@ import sys
 from typing import Any, Optional
 
 try:
-    from .trace import resolve_log_file
+    from .trace import history_log_files, resolve_log_file
 except ImportError:
-    from trace import resolve_log_file
+    from trace import history_log_files, resolve_log_file
 
 
 def load_events(
@@ -22,19 +22,18 @@ def load_events(
     session_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     target = log_file or resolve_log_file()
-    if not target.exists():
-        return []
     events: list[dict[str, Any]] = []
-    for line in target.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(value, dict):
-            continue
-        if session_id is not None and value.get("session_id") != session_id:
-            continue
-        events.append(value)
+    for source in history_log_files(target):
+        for line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(value, dict):
+                continue
+            if session_id is not None and value.get("session_id") != session_id:
+                continue
+            events.append(value)
     return events
 
 
@@ -46,7 +45,6 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         for event in events
         if event.get("execution_outcome") in {"succeeded", "failed", "unknown", "not_executed", "not_applicable"}
     )
-    # Backward compatibility for old log entries that predate execution_outcome.
     legacy_failures = [
         event for event in events
         if "execution_outcome" not in event and event.get("success") is False
