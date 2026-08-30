@@ -1,12 +1,9 @@
-"""Small, executable capability registry for the Windows Dev Agent runtime.
+"""Small executable capability registry for Windows Dev Agent.
 
-The capability catalog is stored in ``capabilities.yaml`` using the JSON-compatible
-subset of YAML. Parsing therefore uses only Python's standard library: an installed
-plugin does not depend on a separate ``pip install`` step before its MCP server can
-start.
-
-Commands are argument vectors, safety is explicit, and execution never goes
-through a shell.
+The catalog uses the JSON-compatible subset of YAML and the Python standard
+library. Commands are argv vectors and never execute through a host shell.
+Safety is computed for the effective request: appended caller arguments cannot
+inherit a weaker auto-allowable classification from the base capability.
 """
 
 from __future__ import annotations
@@ -166,6 +163,18 @@ def command_display(argv: Iterable[str]) -> str:
     return subprocess.list2cmdline(list(argv))
 
 
+def effective_safety(capability: Capability, extra_args: list[str]) -> str:
+    """Return the authority class for the concrete capability request."""
+    if capability.forbidden:
+        return "forbidden"
+    if extra_args:
+        # Extra caller-controlled arguments can change semantics (for example a
+        # linter's --fix flag). Require host approval instead of inheriting the
+        # catalog's base class.
+        return "approval-required"
+    return capability.safety
+
+
 def run_capability(
     capability_id: str,
     *,
@@ -176,13 +185,7 @@ def run_capability(
     timeout_seconds: int = 120,
     path: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """Plan or execute a configured capability.
-
-    Execution is intentionally plan-first. Approval-required capabilities need
-    both ``execute=True`` and ``user_approved=True``. In Claude Code, the plugin
-    PreToolUse hook independently returns ``permissionDecision: ask`` for that
-    call, so a model-provided boolean cannot bypass the host prompt.
-    """
+    """Plan or execute a configured capability."""
     capabilities = load_capabilities(path)
     capability = capabilities.get(capability_id)
     if capability is None:
@@ -203,32 +206,34 @@ def run_capability(
         }
 
     extra_args = extra_args or []
-    if not isinstance(extra_args, list) or not all(isinstance(arg, str) for arg in extra_args):
-        return {"status": "invalid_input", "error": "extra_args must be a list of strings"}
+    if not isinstance(extra_args, list) or not all(isinstance(arg, str) and arg for arg in extra_args):
+        return {"status": "invalid_input", "error": "extra_args must be a list of non-empty strings"}
 
+    safety_class = effective_safety(capability, extra_args)
     argv = [*tool.argv, *extra_args]
     plan: dict[str, Any] = {
         "status": "planned",
         "capability": capability.id,
         "description": capability.description,
-        "safety_class": capability.safety,
+        "base_safety_class": capability.safety,
+        "safety_class": safety_class,
         "tool": tool.name,
         "argv": argv,
         "command": command_display(argv),
         "verify_argv": list(tool.verify_argv),
         "rollback_argv": list(tool.rollback_argv),
-        "requires_user_approval": capability.requires_approval,
+        "requires_user_approval": safety_class in {"reversible", "approval-required"},
     }
 
     if not execute:
         return plan
-    if capability.forbidden:
+    if safety_class == "forbidden":
         return {**plan, "status": "blocked", "error": "Capability is forbidden"}
-    if capability.requires_approval and not user_approved:
+    if safety_class == "approval-required" and not user_approved:
         return {
             **plan,
             "status": "approval_required",
-            "error": "Set user_approved only after the user accepts the host permission prompt",
+            "error": "Host approval is required for the effective capability request",
         }
 
     run_cwd: Optional[Path] = None
