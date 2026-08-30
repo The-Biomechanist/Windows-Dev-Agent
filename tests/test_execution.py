@@ -8,7 +8,12 @@ import sys
 
 import pytest
 
-from src.execution import resolve_executable, resolve_windows_system_executable, run_bounded
+from src.execution import (
+    executable_identity_matches,
+    resolve_executable,
+    resolve_windows_system_executable,
+    run_bounded,
+)
 
 
 def test_resolve_executable_returns_absolute_identity():
@@ -16,6 +21,18 @@ def test_resolve_executable_returns_absolute_identity():
     assert resolved is not None
     assert Path(resolved).is_absolute()
     assert Path(resolved).resolve() == Path(sys.executable).resolve()
+
+
+def test_reviewed_executable_identity_requires_same_live_absolute_file(tmp_path: Path):
+    executable = tmp_path / "tool.exe"
+    executable.write_bytes(b"tool")
+    other = tmp_path / "other.exe"
+    other.write_bytes(b"other")
+
+    assert executable_identity_matches(str(executable), str(executable)) is True
+    assert executable_identity_matches(str(executable), str(other)) is False
+    assert executable_identity_matches("tool.exe", str(executable)) is False
+    assert executable_identity_matches(str(tmp_path / "missing.exe"), str(executable)) is False
 
 
 def test_runner_rejects_unresolved_executable_identity():
