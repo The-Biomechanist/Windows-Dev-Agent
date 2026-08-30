@@ -7,12 +7,7 @@ import sys
 import pytest
 
 from src import capabilities
-from src.capabilities import (
-    CapabilityConfigError,
-    effective_safety,
-    load_capabilities,
-    run_capability,
-)
+from src.capabilities import CapabilityConfigError, effective_safety, load_capabilities, run_capability
 
 
 def _write_catalog(path: Path, safety: str = "reversible") -> None:
@@ -22,13 +17,7 @@ def _write_catalog(path: Path, safety: str = "reversible") -> None:
                 "probe": {
                     "description": "Test capability",
                     "safety": safety,
-                    "tools": [
-                        {
-                            "name": "python",
-                            "argv": [sys.executable, "-c", "print('runtime-ok')"],
-                            "check_argv": [sys.executable, "--version"],
-                        }
-                    ],
+                    "tools": [{"name": "python", "argv": [sys.executable, "-c", "print('runtime-ok')"]}],
                 }
             }
         ),
@@ -36,12 +25,14 @@ def _write_catalog(path: Path, safety: str = "reversible") -> None:
     )
 
 
-def test_catalog_loads_explicit_safety(tmp_path: Path):
+def test_catalog_loads_only_live_execution_fields(tmp_path: Path):
     catalog = tmp_path / "capabilities.yaml"
     _write_catalog(catalog, "approval-required")
     capability = load_capabilities(catalog)["probe"]
     assert capability.safety == "approval-required"
     assert capability.tools[0].argv[0]
+    assert not hasattr(capability.tools[0], "verify_argv")
+    assert not hasattr(capability.tools[0], "rollback_argv")
 
 
 def test_invalid_safety_fails_closed(tmp_path: Path):
@@ -64,30 +55,17 @@ def test_plan_does_not_execute(tmp_path: Path):
     result = run_capability("probe", execute=False, path=catalog)
     assert result["status"] == "planned"
     assert result["safety_class"] == "reversible"
-    assert result["requires_user_approval"] is True
+    assert result["requires_host_approval"] is True
     assert "stdout" not in result
 
 
-def test_reversible_capability_needs_acknowledgement_even_directly(tmp_path: Path):
-    catalog = tmp_path / "capabilities.yaml"
-    _write_catalog(catalog, "reversible")
-    blocked = run_capability("probe", execute=True, user_approved=False, path=catalog)
-    assert blocked["status"] == "approval_required"
-    assert "stdout" not in blocked
-
-    completed = run_capability("probe", execute=True, user_approved=True, path=catalog)
-    assert completed["status"] == "completed"
-    assert "runtime-ok" in completed["stdout"]
-
-
-def test_approval_capability_needs_acknowledgement(tmp_path: Path):
+def test_execute_request_has_no_model_supplied_approval_bit(tmp_path: Path):
     catalog = tmp_path / "capabilities.yaml"
     _write_catalog(catalog, "approval-required")
-    blocked = run_capability("probe", execute=True, user_approved=False, path=catalog)
-    assert blocked["status"] == "approval_required"
-
-    completed = run_capability("probe", execute=True, user_approved=True, path=catalog)
-    assert completed["status"] == "completed"
+    result = run_capability("probe", execute=True, path=catalog)
+    assert result["status"] == "completed"
+    assert result["execution_started"] is True
+    assert "runtime-ok" in result["stdout"]
 
 
 def test_extra_args_upgrade_effective_safety(tmp_path: Path):
@@ -96,20 +74,10 @@ def test_extra_args_upgrade_effective_safety(tmp_path: Path):
     capability = load_capabilities(catalog)["probe"]
     assert effective_safety(capability, []) == "reversible"
     assert effective_safety(capability, ["--fix"]) == "approval-required"
-
     plan = run_capability("probe", execute=False, extra_args=["--fix"], path=catalog)
     assert plan["base_safety_class"] == "reversible"
     assert plan["safety_class"] == "approval-required"
-    assert plan["requires_user_approval"] is True
-
-    blocked = run_capability(
-        "probe",
-        execute=True,
-        user_approved=False,
-        extra_args=["--fix"],
-        path=catalog,
-    )
-    assert blocked["status"] == "approval_required"
+    assert plan["requires_host_approval"] is True
 
 
 def test_read_only_capability_with_extra_args_is_not_silently_read_only(tmp_path: Path):
@@ -144,6 +112,6 @@ def test_capability_subprocess_cannot_consume_mcp_stdin(tmp_path: Path, monkeypa
 def test_forbidden_capability_never_executes(tmp_path: Path):
     catalog = tmp_path / "capabilities.yaml"
     _write_catalog(catalog, "forbidden")
-    result = run_capability("probe", execute=True, user_approved=True, path=catalog)
+    result = run_capability("probe", execute=True, path=catalog)
     assert result["status"] == "blocked"
     assert "stdout" not in result
