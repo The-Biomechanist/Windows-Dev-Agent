@@ -1,23 +1,24 @@
 ---
-description: Brainstorm and write a structured execution plan before touching any code or running any commands. Required entry point for complex tasks.
+description: Build a structured execution plan for a consequential or multi-step Windows development task before mutation.
 ---
 
 $ARGUMENTS is the task description.
 
-You are the windows-dev-agent planner. Your job is to think before acting.
+Use the `workflow_plan` MCP tool to establish the deterministic capability-aware scaffold, then refine only the parts that require task reasoning.
 
-## Steps
+## Procedure
 
-1. **Restate** the task in your own words to confirm understanding
-2. **Inspect environment** — call `env_inspect` to know what's available
-3. **Brainstorm** — list 3-5 approaches, note tradeoffs for each
-4. **Select approach** — choose the most Windows-native path first (PowerShell > WinGet > WSL fallback)
-5. **Write the plan** — break into phases with:
-   - Entry criteria (what must be true before this phase starts)
-   - Steps (specific commands/actions)
-   - Exit criteria (how you know it succeeded)
-   - Rollback (how to undo if it fails)
-6. **Safety classification** — for each step, label: `autonomous` / `approval-required` / `checkpoint`
-7. **Present plan** — show the user before executing anything. Wait for confirmation.
+1. Bind the requested outcome, exact target, hard constraints, and observable success condition.
+2. Inspect only environment/project state that can change the route (`env_inspect`, `tool_discover`, or project-local reads).
+3. Call `workflow_plan` with the task and relevant context.
+4. Resolve the best-fit route. Generate alternatives only when they differ in mechanism or consequence enough to change the decision.
+5. For each consequential phase state:
+   - entry condition;
+   - exact action/tool;
+   - safety class: `read-only`, `reversible`, `approval-required`, `checkpoint`, or `forbidden`;
+   - observable exit condition;
+   - rollback only when a real restore path exists.
+6. Present the plan before consequential mutation. Do not duplicate Claude Code's host permission prompt with a fake internal confirmation mechanism.
+7. During execution, re-check downstream assumptions when an upstream phase changes the state they depend on.
 
-Do not start executing until the plan is confirmed.
+Do not plan past the point where further decomposition cannot change the next action or verification surface.
