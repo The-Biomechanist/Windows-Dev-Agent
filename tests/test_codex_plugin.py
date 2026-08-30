@@ -47,16 +47,19 @@ def test_marketplace_index_when_present_is_immutable_distribution_metadata():
     assert "ref" not in source and "path" not in source
 
 
-def test_codex_mcp_uses_callable_namespace_and_bounded_read_policy():
+def test_codex_mcp_uses_callable_namespace_and_external_execution_policy():
     config = json.loads((ROOT / ".mcp.codex.json").read_text(encoding="utf-8"))
     assert list(config) == ["windows_dev_agent"]
     server = config["windows_dev_agent"]
     assert server["args"] == ["-m", "src.codex_server"]
     assert server["cwd"] == "."
     assert server["default_tools_approval_mode"] == "prompt"
-    for tool in ("env_inspect", "tool_discover", "workflow_plan", "package_search", "logs_query"):
+    for tool in ("env_inspect", "workflow_plan", "logs_query"):
         assert server["tools"][tool]["approval_mode"] == "approve"
-    for tool in ("ecosystem_scan", "mcp_audit", "capability_run", "package_install", "sandbox_run"):
+    for tool in (
+        "tool_discover", "package_search", "ecosystem_scan", "mcp_audit",
+        "capability_run", "package_install", "sandbox_run",
+    ):
         assert server["tools"][tool]["approval_mode"] == "prompt"
 
 
@@ -157,12 +160,14 @@ def test_codex_permission_request_auto_allows_only_plan_first_calls(monkeypatch)
     assert planned["hookSpecificOutput"]["decision"]["behavior"] == "allow"
     assert codex_permission.evaluate_permission_request({"tool_name": package, "tool_input": {"package_id": "Python.Python.3.12", "execute": True}}) is None
 
-    # A caller-supplied cwd cannot be proven to be the active Codex project, so
-    # filesystem inventory reads stay on Codex's native approval UI.
-    ecosystem = CODEX_PREFIX + "ecosystem_scan"
-    assert codex_permission.evaluate_permission_request({"tool_name": ecosystem, "tool_input": {"cwd": "C:\\project", "include_host": False}}) is None
-    audit = CODEX_PREFIX + "mcp_audit"
-    assert codex_permission.evaluate_permission_request({"tool_name": audit, "tool_input": {"cwd": "C:\\project", "include_host": False}}) is None
+    # Filesystem inventory and external discovery stay on native Codex approval.
+    for name, tool_input in (
+        ("ecosystem_scan", {"cwd": "C:\\project", "include_host": False}),
+        ("mcp_audit", {"cwd": "C:\\project", "include_host": False}),
+        ("tool_discover", {"category": "runtimes"}),
+        ("package_search", {"query": "Python"}),
+    ):
+        assert codex_permission.evaluate_permission_request({"tool_name": CODEX_PREFIX + name, "tool_input": tool_input}) is None
 
 
 def test_codex_hook_config_uses_native_contract_and_no_cross_process_plugin_data_assumption():
@@ -176,6 +181,8 @@ def test_codex_hook_config_uses_native_contract_and_no_cross_process_plugin_data
     assert "sandbox_run" in permission_matcher
     assert "ecosystem_scan" not in permission_matcher
     assert "mcp_audit" not in permission_matcher
+    assert "tool_discover" not in permission_matcher
+    assert "package_search" not in permission_matcher
     commands = [
         hook["command"]
         for entries in config["hooks"].values()
