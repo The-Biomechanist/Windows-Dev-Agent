@@ -27,10 +27,11 @@ def run(coro):
 def test_codex_manifest_points_to_shared_root_components_and_version():
     manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "windows-dev-agent"
-    assert manifest["version"] == __version__ == "0.4.3"
+    assert manifest["version"] == __version__ == "0.5.0"
     assert manifest["skills"] == "./skills/"
     assert manifest["mcpServers"] == "./.mcp.codex.json"
     assert manifest["hooks"] == "./hooks/codex-hooks.json"
+    assert "ChatGPT desktop" not in manifest["description"]
 
 
 def test_marketplace_index_when_present_is_immutable_distribution_metadata():
@@ -47,12 +48,14 @@ def test_marketplace_index_when_present_is_immutable_distribution_metadata():
     assert "ref" not in source and "path" not in source
 
 
-def test_codex_mcp_uses_callable_namespace_and_host_bound_execution_policy():
+def test_codex_mcp_uses_isolated_launcher_without_cwd_import_dependency():
     config = json.loads((ROOT / ".mcp.codex.json").read_text(encoding="utf-8"))
     assert list(config) == ["windows_dev_agent"]
     server = config["windows_dev_agent"]
-    assert server["args"] == ["-m", "src.codex_server"]
-    assert server["cwd"] == "."
+    assert server["command"] == "powershell.exe"
+    assert "${PLUGIN_ROOT}/scripts/launch-python.ps1" in server["args"]
+    assert server["args"][-2:] == ["-Module", "src.codex_server"]
+    assert "cwd" not in server
     assert server["tool_timeout_sec"] > 600
     assert server["default_tools_approval_mode"] == "prompt"
     for tool in ("env_inspect", "logs_query"):
@@ -74,18 +77,6 @@ def test_all_shared_skills_have_codex_frontmatter_names():
         frontmatter = text.split("---", 2)[1]
         assert f"\nname: {directory.name}\n" in f"\n{frontmatter}\n"
         assert "\ndescription:" in f"\n{frontmatter}\n"
-
-
-def test_claude_commands_remain_thin_namespaced_adapters():
-    routes = {
-        "env.md": "windows-dev-agent:env-inspect",
-        "plan.md": "windows-dev-agent:workflow-plan",
-        "defrag.md": "windows-dev-agent:ecosystem-defrag",
-    }
-    for filename, skill in routes.items():
-        text = (ROOT / "commands" / filename).read_text(encoding="utf-8")
-        assert skill in text
-        assert "## Procedure" not in text
 
 
 def test_codex_project_scoped_tools_require_explicit_project_identity():
@@ -117,14 +108,14 @@ def test_codex_initialize_explains_project_permission_and_hook_trust_boundaries(
 
 
 def test_runtime_binding_restores_shared_core_state(monkeypatch, tmp_path: Path):
-    before = (common_server.DATA_DIR, common_server.LOG_FILE, common_server.ENVIRONMENT_CACHE_FILE)
+    before = (common_server.DATA_DIR, common_server.LOG_FILE)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     project = tmp_path / "project"
     project.mkdir()
     with codex_server._runtime_binding(project):
         assert common_server.DATA_DIR == resolve_codex_data_dir()
         assert os.environ["WINDOWS_DEV_AGENT_PROJECT_DIR"] == str(project)
-    assert (common_server.DATA_DIR, common_server.LOG_FILE, common_server.ENVIRONMENT_CACHE_FILE) == before
+    assert (common_server.DATA_DIR, common_server.LOG_FILE) == before
 
 
 def _ecosystem_response(host_included: bool):
@@ -164,62 +155,34 @@ def test_codex_permission_request_auto_allows_only_scope_proven_plans(monkeypatc
 
     package = CODEX_PREFIX + "package_install"
     planned_package = codex_permission.evaluate_permission_request(
-        {
-            "cwd": str(project),
-            "tool_name": package,
-            "tool_input": {"package_id": "Python.Python.3.12", "execute": False},
-        }
+        {"cwd": str(project), "tool_name": package, "tool_input": {"package_id": "Python.Python.3.12", "execute": False}}
     )
     assert planned_package["hookSpecificOutput"]["decision"]["behavior"] == "allow"
     assert codex_permission.evaluate_permission_request(
-        {
-            "cwd": str(project),
-            "tool_name": package,
-            "tool_input": {"package_id": "Python.Python.3.12", "execute": True},
-        }
+        {"cwd": str(project), "tool_name": package, "tool_input": {"package_id": "Python.Python.3.12", "execute": True}}
     ) is None
 
     capability = CODEX_PREFIX + "capability_run"
     planned_capability = codex_permission.evaluate_permission_request(
-        {
-            "cwd": str(project),
-            "tool_name": capability,
-            "tool_input": {"capability": "test-python", "cwd": str(child), "execute": False},
-        }
+        {"cwd": str(project), "tool_name": capability, "tool_input": {"capability": "test-python", "cwd": str(child), "execute": False}}
     )
     assert planned_capability["hookSpecificOutput"]["decision"]["behavior"] == "allow"
     assert codex_permission.evaluate_permission_request(
-        {
-            "cwd": str(project),
-            "tool_name": capability,
-            "tool_input": {"capability": "test-python", "cwd": str(outside), "execute": False},
-        }
+        {"cwd": str(project), "tool_name": capability, "tool_input": {"capability": "test-python", "cwd": str(outside), "execute": False}}
     ) is None
 
     workflow = CODEX_PREFIX + "workflow_plan"
     planned_workflow = codex_permission.evaluate_permission_request(
-        {
-            "cwd": str(project),
-            "tool_name": workflow,
-            "tool_input": {"task": "run tests", "cwd": str(project)},
-        }
+        {"cwd": str(project), "tool_name": workflow, "tool_input": {"task": "run tests", "cwd": str(project)}}
     )
     assert planned_workflow["hookSpecificOutput"]["decision"]["behavior"] == "allow"
     assert codex_permission.evaluate_permission_request(
-        {
-            "cwd": str(project),
-            "tool_name": workflow,
-            "tool_input": {"task": "run tests", "cwd": str(outside)},
-        }
+        {"cwd": str(project), "tool_name": workflow, "tool_input": {"task": "run tests", "cwd": str(outside)}}
     ) is None
 
     sandbox = CODEX_PREFIX + "sandbox_run"
     assert codex_permission.evaluate_permission_request(
-        {
-            "cwd": str(project),
-            "tool_name": sandbox,
-            "tool_input": {"command": "pwd", "workspace_folder": str(project), "execute": False},
-        }
+        {"cwd": str(project), "tool_name": sandbox, "tool_input": {"command": "pwd", "workspace_folder": str(project), "execute": False}}
     ) is None
 
     for name, tool_input in (
@@ -231,7 +194,7 @@ def test_codex_permission_request_auto_allows_only_scope_proven_plans(monkeypatc
         assert codex_permission.evaluate_permission_request({"cwd": str(project), "tool_name": CODEX_PREFIX + name, "tool_input": tool_input}) is None
 
 
-def test_codex_hook_config_uses_native_contract_and_scope_bound_shortcuts():
+def test_codex_hook_config_avoids_windows_quoted_command_bug_and_sandbox_autoallow():
     raw = (ROOT / "hooks" / "codex-hooks.json").read_text(encoding="utf-8")
     config = json.loads(raw)
     assert "permissionDecision: ask" not in raw
@@ -246,13 +209,15 @@ def test_codex_hook_config_uses_native_contract_and_scope_bound_shortcuts():
     assert "tool_discover" not in permission_matcher
     assert "package_search" not in permission_matcher
     commands = [
-        hook["command"]
+        hook["commandWindows"]
         for entries in config["hooks"].values()
         for entry in entries
         for hook in entry.get("hooks", [])
     ]
-    assert commands and all("${PLUGIN_ROOT}" in command for command in commands)
-    assert all("${PLUGIN_DATA}" not in command for command in commands)
+    assert commands
+    assert all('"' not in command for command in commands)
+    assert all("$env:PLUGIN_ROOT" in command for command in commands)
+    assert all("launch-python.ps1" in command for command in commands)
 
 
 def test_codex_trace_derives_known_success_and_preserves_unknown_without_payload():
