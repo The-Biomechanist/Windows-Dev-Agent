@@ -1,10 +1,9 @@
 """Codex PreToolUse adapter for Windows Dev Agent safety classification.
 
-Current Codex can express ``ask`` from PreToolUse, but Windows Dev Agent keeps
-native MCP approval policy as the prompt authority. This adapter therefore
-denies only actions the shared classifier marks forbidden and otherwise defers
-to Codex. PermissionRequest handles the small set of trusted plan-only
-shortcuts separately.
+Windows Dev Agent keeps native MCP approval policy as the prompt authority. This
+adapter therefore denies only actions the shared classifier marks forbidden and
+otherwise defers to Codex. PermissionRequest handles the small set of trusted
+plan-only shortcuts separately.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ if str(ROOT) not in sys.path:
 
 from src.observability.trace import append_event, resolve_log_file
 from src.runtime_paths import resolve_codex_data_dir
-from src.safety.gate import classify_tool_call
+from src.safety.classifier import classify_tool_call
 
 CODEX_MCP_PREFIX = "mcp__windows_dev_agent__"
 SHARED_MCP_PREFIX = "mcp__windows-dev-agent__"
