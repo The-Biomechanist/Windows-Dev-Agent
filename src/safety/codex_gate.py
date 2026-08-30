@@ -22,6 +22,15 @@ if str(ROOT) not in sys.path:
 from src.observability.trace import append_event, resolve_log_file
 from src.safety.gate import classify_tool_call
 
+CODEX_MCP_PREFIX = "mcp__windows_dev_agent__"
+SHARED_MCP_PREFIX = "mcp__windows-dev-agent__"
+
+
+def _shared_tool_name(tool_name: str) -> str:
+    if tool_name.startswith(CODEX_MCP_PREFIX):
+        return SHARED_MCP_PREFIX + tool_name[len(CODEX_MCP_PREFIX):]
+    return tool_name
+
 
 def evaluate_hook_event(
     event: dict[str, Any], *, log_file: Optional[Path] = None
@@ -31,7 +40,7 @@ def evaluate_hook_event(
     if not isinstance(tool_input, dict):
         tool_input = {}
 
-    safety_class = classify_tool_call(tool_name, tool_input)
+    safety_class = classify_tool_call(_shared_tool_name(tool_name), tool_input)
     denied = safety_class == "forbidden"
     try:
         append_event(
