@@ -9,7 +9,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/The-Biomechanist/Windows-Dev-Agent.git",
-        "sha": "5a78bb5c47109d2d5adde49753a69c2ca51a1035"
+        "sha": "1570497e542b74ad99e9575fa9756e2da4245d79"
       },
       "policy": {
         "installation": "AVAILABLE",

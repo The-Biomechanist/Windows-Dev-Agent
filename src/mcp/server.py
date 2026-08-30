@@ -43,6 +43,23 @@ MAX_SANDBOX_PAYLOAD_ENTRIES = 10_000
 MAX_SANDBOX_PAYLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB staged input budget
 MAX_JSON_CONFIG_BYTES = 2 * 1024 * 1024
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+_ROUTING_GENERIC_TOKENS = {
+    "build",
+    "check",
+    "create",
+    "current",
+    "inspect",
+    "lint",
+    "package",
+    "plan",
+    "project",
+    "route",
+    "run",
+    "setup",
+    "test",
+    "tool",
+    "workflow",
+}
 
 
 def _default_project_dir() -> Path:
@@ -94,7 +111,7 @@ TOOLS = [
     },
     {
         "name": "workflow_plan",
-        "description": "Build a deterministic capability-aware execution scaffold for a task without collapsing tied or unavailable routes into a false selection.",
+        "description": "Build a deterministic capability-aware execution scaffold without treating weak, tied, or unavailable routing evidence as a selection.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -312,7 +329,17 @@ async def handle_capability_run(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _task_tokens(text: str) -> set[str]:
-    return {token.lower() for token in re.findall(r"[A-Za-z0-9_.+-]+", text) if len(token) > 1}
+    tokens: set[str] = set()
+    for raw in re.findall(r"[A-Za-z0-9_.+\-]+", text):
+        token = raw.lower()
+        pieces = [token, *re.split(r"[-_.+]+", token)]
+        for piece in pieces:
+            if len(piece) <= 1:
+                continue
+            tokens.add(piece)
+            if len(piece) > 3 and piece.endswith("s") and not piece.endswith("ss"):
+                tokens.add(piece[:-1])
+    return tokens
 
 
 async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
@@ -329,47 +356,103 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
         return {"status": "configuration_error", "error": str(exc)}
 
     task_tokens = _task_tokens(task + " " + str(args.get("context", "")))
-    ranked: list[tuple[int, str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     for cap_id, capability in capabilities.items():
-        haystack = _task_tokens(cap_id + " " + capability.description + " " + " ".join(capability.tags))
-        ranked.append((len(task_tokens & haystack), cap_id, capability))
-    ranked.sort(key=lambda row: (-row[0], row[1]))
-
-    candidates = []
-    for score, cap_id, capability in ranked[:3]:
+        identity_tokens = _task_tokens(cap_id + " " + cap_id.replace("-", " ") + " " + " ".join(capability.tags))
+        description_tokens = _task_tokens(capability.description)
+        identity_matches = sorted(task_tokens & identity_tokens)
+        discriminating_matches = sorted(set(identity_matches) - _ROUTING_GENERIC_TOKENS)
+        description_matches = sorted(task_tokens & description_tokens)
         tool = select_available_tool(capability)
         candidates.append(
             {
                 "capability": cap_id,
-                "score": score,
+                "score": len(identity_matches),
+                "identity_score": len(identity_matches),
+                "discriminating_score": len(discriminating_matches),
+                "description_score": len(description_matches),
+                "identity_matches": identity_matches,
+                "discriminating_matches": discriminating_matches,
+                "description_matches": description_matches,
                 "description": capability.description,
                 "safety_class": capability.safety,
                 "available_tool": tool.name if tool else None,
+                "configured_tools": [configured.name for configured in capability.tools],
             }
         )
+    candidates.sort(
+        key=lambda row: (
+            -int(row["discriminating_score"]),
+            -int(row["identity_score"]),
+            -int(row["description_score"]),
+            str(row["capability"]),
+        )
+    )
 
-    top_score = candidates[0]["score"] if candidates else 0
-    top_candidates = [candidate for candidate in candidates if candidate["score"] == top_score] if top_score > 0 else []
-    matched_candidate = top_candidates[0] if len(top_candidates) == 1 else None
-    if top_score <= 0:
-        selection_status = "no_match"
-        selected = None
-    elif len(top_candidates) > 1:
-        selection_status = "ambiguous"
-        selected = None
-    elif matched_candidate and matched_candidate["available_tool"] is None:
-        selection_status = "matched_unavailable"
-        selected = None
+    matched_candidate: Optional[dict[str, Any]] = None
+    selected: Optional[dict[str, Any]] = None
+    selection_status = "no_match"
+    route_discriminator: Optional[dict[str, Any]] = None
+    eligible = [candidate for candidate in candidates if int(candidate["discriminating_score"]) > 0]
+    if eligible:
+        top_rank = (
+            int(eligible[0]["discriminating_score"]),
+            int(eligible[0]["identity_score"]),
+            int(eligible[0]["description_score"]),
+        )
+        top = [
+            candidate
+            for candidate in eligible
+            if (
+                int(candidate["discriminating_score"]),
+                int(candidate["identity_score"]),
+                int(candidate["description_score"]),
+            ) == top_rank
+        ]
+        if len(top) > 1:
+            selection_status = "ambiguous"
+            route_discriminator = {
+                "rank": list(top_rank),
+                "candidates": [candidate["capability"] for candidate in top],
+                "availability": {
+                    str(candidate["capability"]): candidate.get("available_tool")
+                    for candidate in top
+                },
+                "reason": "Multiple capabilities have equal strongest task evidence. Tool availability is an execution prerequisite, not evidence that resolves the semantic route.",
+            }
+        else:
+            matched_candidate = top[0]
+            if matched_candidate.get("available_tool"):
+                selection_status = "selected"
+                selected = matched_candidate
+            else:
+                selection_status = "matched_unavailable"
+                route_discriminator = {
+                    "rank": list(top_rank),
+                    "candidates": [matched_candidate["capability"]],
+                    "configured_tools": {
+                        str(matched_candidate["capability"]): list(matched_candidate["configured_tools"])
+                    },
+                    "reason": "The uniquely strongest semantic route has no configured executable currently available; do not silently fall through to a weaker match.",
+                }
     else:
-        selection_status = "selected"
-        selected = matched_candidate
+        weak = [
+            candidate
+            for candidate in candidates
+            if int(candidate["identity_score"]) > 0 or int(candidate["description_score"]) > 0
+        ]
+        if weak:
+            route_discriminator = {
+                "candidates": [candidate["capability"] for candidate in weak[:5]],
+                "reason": "Only generic identity overlap or description-only similarity was observed. That evidence is insufficient for deterministic capability selection.",
+            }
 
     if selected:
         route_action = f"Select capability {selected['capability']}"
         execute_action = "Execute the selected capability or explicitly authorized tool path"
         execute_safety = selected["safety_class"]
     elif selection_status == "ambiguous":
-        route_action = "Preserve the tied top capability candidates and obtain a discriminator before selecting one"
+        route_action = "Preserve the tied top capability candidates and obtain a semantic discriminator before selecting one"
         execute_action = "Do not execute until the routing ambiguity is resolved"
         execute_safety = "unresolved"
     elif selection_status == "matched_unavailable" and matched_candidate:
@@ -380,7 +463,7 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
         execute_action = "Do not execute until an available route is established"
         execute_safety = "unresolved"
     else:
-        route_action = "Choose the smallest supported route from observed evidence"
+        route_action = "Choose a capability or ordinary tool path only after task evidence distinguishes a supported route"
         execute_action = "Do not execute until a supported route is established"
         execute_safety = "unresolved"
 
@@ -421,6 +504,7 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
         "selection_status": selection_status,
         "matched_candidate": matched_candidate,
         "selected_candidate": selected,
+        "route_discriminator": route_discriminator,
         "candidate_capabilities": candidates,
         "phases": phases,
     }
@@ -526,10 +610,7 @@ def _select_sandbox(environment: str, isolation_requirement: Optional[str], work
 
 def _is_reparse_point(path: Path) -> bool:
     """Return whether a Windows path is an NTFS reparse point without following it."""
-    try:
-        stat_result = os.stat(path, follow_symlinks=False)
-    except OSError:
-        return False
+    stat_result = os.stat(path, follow_symlinks=False)
     attributes = int(getattr(stat_result, "st_file_attributes", 0) or 0)
     return bool(attributes & FILE_ATTRIBUTE_REPARSE_POINT)
 
@@ -572,10 +653,19 @@ def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[P
             return None, f"payload paths overlap or duplicate one another: {raw}"
 
         source = workspace / rel
+        current = workspace
+        for part in rel.parts:
+            current = current / part
+            try:
+                if current.is_symlink() or _is_reparse_point(current):
+                    return None, f"payload path crosses a symbolic link or reparse point: {current}"
+            except FileNotFoundError:
+                return None, f"payload path does not exist: {raw}"
+            except OSError as exc:
+                return None, f"payload metadata could not be established for {current}: {exc}"
+
         if not source.exists():
             return None, f"payload path does not exist: {raw}"
-        if source.is_symlink() or _is_reparse_point(source):
-            return None, f"payload path is a symbolic link or reparse point: {raw}"
         try:
             source.resolve().relative_to(workspace)
         except ValueError:
@@ -899,7 +989,11 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
 def _load_log_events() -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for source in history_log_files(LOG_FILE):
-        for line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError:

@@ -17,7 +17,7 @@ def test_manifest_and_runtime_version_match_release():
     assert manifest["$schema"] == "https://json.schemastore.org/claude-code-plugin-manifest.json"
     assert manifest["name"] == "windows-dev-agent"
     assert manifest["displayName"] == "Windows Dev Agent"
-    assert manifest["version"] == __version__ == "0.4.1"
+    assert manifest["version"] == __version__ == "0.4.2"
     assert "minClaudeCodeVersion" not in manifest
 
 
