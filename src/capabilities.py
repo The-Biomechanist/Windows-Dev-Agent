@@ -266,7 +266,7 @@ def run_capability(
             **plan,
             "status": "stale_plan",
             "error": "Capability plan state changed; obtain and review a fresh plan before execution",
-            "expected_plan_fingerprint": plan_fingerprint,
+            "submitted_plan_fingerprint": plan_fingerprint,
             "execution_started": False,
         }
 
