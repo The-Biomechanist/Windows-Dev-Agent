@@ -42,7 +42,7 @@ APPROVAL_PATTERNS = [
 ]
 FORBIDDEN_PATTERNS = [
     re.compile(r"\b(format\s+[a-z]:|diskpart\b|bcdedit\b|cipher\s+/w:)", re.I),
-    re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\\\Windows\\\\System32)", re.I),
+    re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\Windows\\System32)", re.I),
 ]
 DYNAMIC_SHELL = re.compile(r"(;|\r|\n|&&|\|\||\||>|<|\$\(|@\(|`|(?<!&)&(?!&))")
 MCP_PREFIXES = (
