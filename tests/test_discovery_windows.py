@@ -21,6 +21,14 @@ SCRIPT = ROOT / "src" / "discovery" / "discovery.ps1"
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="native Windows probe")
 
 
+def test_shipped_optional_feature_identities_match_windows_contract():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert 'Get-OptionalFeatureProbe "Microsoft-Hyper-V"' in text
+    assert 'Get-OptionalFeatureProbe "Containers-DisposableClientVM"' in text
+    assert 'Get-OptionalFeatureProbe "Containers-DisposableVM"' not in text
+    assert "Get-WindowsOptionalFeature -Online" in text
+
+
 def test_native_discovery_script_emits_truth_preserving_json():
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT)],
