@@ -4,11 +4,7 @@
     "safety": "read-only",
     "tags": ["git", "inspection"],
     "tools": [
-      {
-        "name": "git",
-        "argv": ["git", "status", "--short", "--branch"],
-        "check_argv": ["git", "--version"]
-      }
+      {"name": "git", "argv": ["git", "status", "--short", "--branch"]}
     ]
   },
   "lint-python": {
@@ -16,18 +12,8 @@
     "safety": "reversible",
     "tags": ["python", "lint"],
     "tools": [
-      {
-        "name": "ruff",
-        "argv": ["ruff", "check", "."],
-        "check_argv": ["ruff", "--version"],
-        "verify_argv": ["ruff", "check", "."]
-      },
-      {
-        "name": "pylint",
-        "argv": ["pylint", "."],
-        "check_argv": ["pylint", "--version"],
-        "verify_argv": ["pylint", "."]
-      }
+      {"name": "ruff", "argv": ["ruff", "check", "."]},
+      {"name": "pylint", "argv": ["pylint", "."]}
     ]
   },
   "lint-javascript": {
@@ -35,18 +21,8 @@
     "safety": "reversible",
     "tags": ["javascript", "typescript", "lint"],
     "tools": [
-      {
-        "name": "eslint",
-        "argv": ["eslint", "."],
-        "check_argv": ["eslint", "--version"],
-        "verify_argv": ["eslint", "."]
-      },
-      {
-        "name": "dprint",
-        "argv": ["dprint", "check"],
-        "check_argv": ["dprint", "--version"],
-        "verify_argv": ["dprint", "check"]
-      }
+      {"name": "eslint", "argv": ["eslint", "."]},
+      {"name": "dprint", "argv": ["dprint", "check"]}
     ]
   },
   "test-python": {
@@ -54,12 +30,7 @@
     "safety": "reversible",
     "tags": ["python", "test"],
     "tools": [
-      {
-        "name": "pytest",
-        "argv": ["pytest"],
-        "check_argv": ["pytest", "--version"],
-        "verify_argv": ["pytest"]
-      }
+      {"name": "pytest", "argv": ["pytest"]}
     ]
   },
   "test-dotnet": {
@@ -67,12 +38,7 @@
     "safety": "reversible",
     "tags": ["dotnet", "test"],
     "tools": [
-      {
-        "name": "dotnet",
-        "argv": ["dotnet", "test"],
-        "check_argv": ["dotnet", "--version"],
-        "verify_argv": ["dotnet", "test"]
-      }
+      {"name": "dotnet", "argv": ["dotnet", "test"]}
     ]
   },
   "build-dotnet": {
@@ -80,12 +46,7 @@
     "safety": "reversible",
     "tags": ["dotnet", "build"],
     "tools": [
-      {
-        "name": "dotnet",
-        "argv": ["dotnet", "build"],
-        "check_argv": ["dotnet", "--version"],
-        "verify_argv": ["dotnet", "build", "--no-restore"]
-      }
+      {"name": "dotnet", "argv": ["dotnet", "build"]}
     ]
   },
   "create-pr": {
@@ -93,11 +54,7 @@
     "safety": "approval-required",
     "tags": ["git", "github", "publish"],
     "tools": [
-      {
-        "name": "gh",
-        "argv": ["gh", "pr", "create", "--fill"],
-        "check_argv": ["gh", "--version"]
-      }
+      {"name": "gh", "argv": ["gh", "pr", "create", "--fill"]}
     ]
   }
 }
