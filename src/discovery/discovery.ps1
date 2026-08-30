@@ -97,11 +97,14 @@ $wslInstalled = $null
 if ($wslFeature.available -eq $true -and $wslExePresent -eq $true) {
     $wslInstalled = $true
 }
+elseif ($wslFeature.available -eq $true -and $wslExePresent -eq $false) {
+    # The feature claims enabled while the required executable is absent. That
+    # is an observed inconsistency, not ordinary "missing" state.
+    Add-DiscoveryError "WSL feature is enabled but wsl.exe was not found"
+    $wslInstalled = $null
+}
 elseif ($wslFeature.available -eq $false -or $wslExePresent -eq $false) {
     $wslInstalled = $false
-}
-elseif ($wslFeature.available -eq $true -and $wslExePresent -eq $false) {
-    Add-DiscoveryError "WSL feature is enabled but wsl.exe was not found"
 }
 
 $devDrives = @()
