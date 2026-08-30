@@ -9,15 +9,11 @@ Use this when the agent/developer-tool environment itself has become duplicated,
 
 ## 1. Establish the inventory
 
-Call `ecosystem_scan` for the current project. In Codex, pass the current session/project directory explicitly as `cwd`. Use `include_packages: true` only when installed WinGet packages are relevant; it is slower and usually unnecessary for agent-config cleanup.
+Start with `ecosystem_scan` for the current project and `include_host: false`. This bounded scan owns project-local VS Code recommendations, MCP config, and agent configuration such as `.clinerules`, `.roo/`, `.continue/`, `.agents/`, Copilot instructions, and `CLAUDE.md` when present.
 
-The scan may establish:
+Request `include_host: true` only when user-level extensions, plugins, MCP configuration, or installed package state is actually needed to decide the consolidation. That broader read remains on the active host permission surface. Use `include_packages: true` only together with `include_host: true` and only when installed WinGet packages matter.
 
-- installed and project-recommended VS Code extensions;
-- MCP configuration surfaces it can read safely;
-- project agent configuration such as `.clinerules`, `.roo/`, `.continue/`, Copilot instructions, `CLAUDE.md`, or Codex `.agents/` configuration when present;
-- locally discoverable plugin directories for the active host;
-- optional WinGet package inventory.
+In Codex, project-only ecosystem reads may be auto-approved by the optional trusted `PermissionRequest` hook; host-wide reads are not. If the plugin hooks have not been trusted, Codex may prompt even for the project-only read.
 
 Do not invent enabled/disabled plugin state or configuration meaning the scan cannot establish. Treat unavailable host-owned state as `unknown` unless an authoritative host surface is actually queried.
 
@@ -55,6 +51,6 @@ Never delete first and call Git history or a vague backup strategy rollback.
 
 ## 5. Verify and document
 
-Re-scan the changed surfaces. Only then summarize what is active, what routes through Windows Dev Agent, what was retained, what remains unknown, and how to undo the task-owned changes.
+Re-scan only the changed surfaces, widening back to host inventory only when the claimed effect lives there. Then summarize what is active, what routes through Windows Dev Agent, what was retained, what remains unknown, and how to undo the task-owned changes.
 
-Create `AGENT_SETUP.md` only when the user wants a persistent project handoff. Do not write it merely to prove the workflow ran.
+Create `AGENT_SETUP.md` only when the user wants a persistent project handoff.
