@@ -78,7 +78,8 @@ jobs:
           source = market["plugins"][0]["source"]
           sha = source.get("sha", "")
           assert re.fullmatch(r"[0-9a-f]{40}", sha), source
-          assert "ref" not in source, source
+          assert "ref" not in source and "path" not in source, source
+
           pinned_manifest = json.loads(
               subprocess.check_output(
                   ["git", "show", f"{sha}:.codex-plugin/plugin.json"],
@@ -88,5 +89,25 @@ jobs:
           current_manifest = json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8"))
           assert pinned_manifest["name"] == current_manifest["name"] == "windows-dev-agent"
           assert pinned_manifest["version"] == current_manifest["version"]
-          print(f"Marketplace pins verified payload {sha} version {pinned_manifest['version']}")
+
+          payload_carries_index = subprocess.run(
+              ["git", "cat-file", "-e", f"{sha}:.agents/plugins/marketplace.json"],
+              capture_output=True,
+              text=True,
+          )
+          assert payload_carries_index.returncode != 0, "immutable payload must not carry its own marketplace index"
+
+          diff = subprocess.run(
+              [
+                  "git", "diff", "--exit-code", "--no-ext-diff",
+                  sha, "HEAD", "--", ".", ":(exclude).agents/plugins/marketplace.json",
+              ],
+              capture_output=True,
+              text=True,
+          )
+          assert diff.returncode == 0, (
+              "marketplace payload differs from current release tree outside the index:\n"
+              + diff.stdout + diff.stderr
+          )
+          print(f"Marketplace pins byte-identical payload {sha} version {pinned_manifest['version']}")
           '@ | python -
