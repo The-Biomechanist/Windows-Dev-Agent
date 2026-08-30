@@ -66,19 +66,26 @@ def _decode_result_payload(response: Any) -> Optional[dict[str, Any]]:
 
 
 def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str]]:
+    """Derive only what the returned tool evidence establishes.
+
+    Plan-first tools use their explicit ``execute`` flag. Other tools may still
+    launch external processes (for example ``package_search``), so a concrete
+    result status must be considered before declaring execution inapplicable.
+    """
     tool_input = payload.get("tool_input") or {}
-    if not isinstance(tool_input, dict) or "execute" not in tool_input:
-        return "not_applicable", None
-    if not bool(tool_input.get("execute", False)):
-        return "not_executed", "planned"
+    has_execute = isinstance(tool_input, dict) and "execute" in tool_input
+    requested_execute = bool(tool_input.get("execute", False)) if isinstance(tool_input, dict) else False
 
     hook_event = str(payload.get("hook_event_name", ""))
     result = _decode_result_payload(payload.get("tool_response"))
     status = str(result.get("status")) if isinstance(result, dict) and result.get("status") is not None else None
+
+    if has_execute and not requested_execute:
+        return "not_executed", status or "planned"
     if hook_event == "PostToolUseFailure":
         return "failed", status
     if result is None:
-        return "unknown", None
+        return ("unknown", None) if has_execute and requested_execute else ("not_applicable", None)
 
     if status == "completed":
         succeeded = result.get("succeeded")
@@ -104,7 +111,10 @@ def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str
         "configuration_error",
     }:
         return "not_executed", status
-    return "unknown", status
+
+    if has_execute and requested_execute:
+        return "unknown", status
+    return "not_applicable", status
 
 
 def event_from_hook(payload: dict[str, Any]) -> dict[str, Any]:
