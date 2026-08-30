@@ -7,6 +7,7 @@ Provides methods to query environment state.
 
 import json
 import logging
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -28,8 +29,9 @@ from ..models.environment import (
 
 logger = logging.getLogger(__name__)
 
+ROOT = Path(__file__).resolve().parent.parent.parent
 DISCOVERY_SCRIPT = Path(__file__).parent / "discovery.ps1"
-CACHE_DIR = Path(__file__).parent.parent.parent / ".cache"
+CACHE_DIR = Path(os.environ.get("WINDOWS_DEV_AGENT_DATA_DIR", str(ROOT / ".cache"))).expanduser()
 CACHE_FILE = CACHE_DIR / "environment.json"
 CACHE_TTL_SECONDS = 300  # 5 minutes
 
@@ -44,7 +46,7 @@ class EnvironmentDiscovery:
 
     def __init__(self, cache_enabled: bool = True):
         self.cache_enabled = cache_enabled
-        if not CACHE_DIR.exists():
+        if self.cache_enabled:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     def discover(self, force_refresh: bool = False) -> EnvironmentSnapshot:
@@ -63,14 +65,12 @@ class EnvironmentDiscovery:
         Raises:
             DiscoveryError: If discovery fails.
         """
-        # Try cache first
         if self.cache_enabled and not force_refresh:
             cached = self._load_cache()
             if cached is not None:
                 logger.info("Using cached environment snapshot")
                 return cached
 
-        # Run discovery
         logger.info("Running environment discovery...")
         try:
             snapshot = self._run_discovery()
@@ -87,7 +87,6 @@ class EnvironmentDiscovery:
             raise DiscoveryError(f"Discovery script not found: {DISCOVERY_SCRIPT}")
 
         try:
-            # Run PowerShell script
             result = subprocess.run(
                 [
                     "powershell.exe",
@@ -108,11 +107,9 @@ class EnvironmentDiscovery:
                 if result.stderr:
                     logger.warning(f"stderr: {result.stderr}")
 
-            # Parse JSON output
             try:
                 data = json.loads(result.stdout)
             except json.JSONDecodeError as e:
-                # If on non-Windows or PowerShell not available, use fallback discovery
                 logger.warning(f"Failed to parse PowerShell output: {e}")
                 return self._fallback_discovery()
 
@@ -131,7 +128,6 @@ class EnvironmentDiscovery:
         try:
             timestamp = datetime.fromisoformat(data.get("timestamp", datetime.now().isoformat()))
 
-            # Parse system info
             sys_data = data.get("system", {})
             system = SystemInfo(
                 os_name=sys_data.get("os_name", "Unknown"),
@@ -146,7 +142,6 @@ class EnvironmentDiscovery:
                 total_physical_memory_gb=sys_data.get("total_physical_memory_gb", 0.0),
             )
 
-            # Parse virtualization info
             virt_data = data.get("virtualization", {})
             dev_drives = [
                 DevDrive(**drive) for drive in virt_data.get("dev_drives", [])
@@ -160,7 +155,6 @@ class EnvironmentDiscovery:
                 dev_drives=dev_drives,
             )
 
-            # Parse development tools
             tools_data = data.get("development_tools", {})
             development_tools = DevelopmentTools(
                 winget_available=tools_data.get("winget_available", False),
@@ -172,7 +166,6 @@ class EnvironmentDiscovery:
                 visual_studio_available=tools_data.get("visual_studio_available", False),
             )
 
-            # Parse runtimes
             rt_data = data.get("runtimes", {})
             runtimes = Runtimes(
                 python=RuntimeInfo(
@@ -197,7 +190,6 @@ class EnvironmentDiscovery:
                 ),
             )
 
-            # Parse git config
             git_data = data.get("git", {})
             git = GitConfig(
                 available=git_data.get("available", False),
@@ -206,7 +198,6 @@ class EnvironmentDiscovery:
                 user_email=git_data.get("user_email"),
             )
 
-            # Parse editors
             editors_data = data.get("editors", {})
             editors = EditorAvailability(
                 visual_studio_code=editors_data.get("visual_studio_code", False),
@@ -216,7 +207,6 @@ class EnvironmentDiscovery:
                 jetbrains_clion=editors_data.get("jetbrains_clion", False),
             )
 
-            # Parse PowerShell modules
             ps_data = data.get("powershell_modules", {})
             powershell_modules = PowerShellModules(
                 count=ps_data.get("count", 0),
@@ -261,14 +251,12 @@ class EnvironmentDiscovery:
             return None
 
         try:
-            # Check cache age
             age = datetime.now() - datetime.fromtimestamp(CACHE_FILE.stat().st_mtime)
             if age > timedelta(seconds=CACHE_TTL_SECONDS):
                 logger.debug(f"Cache expired ({age.total_seconds():.0f}s old)")
                 return None
 
-            # Load cache
-            with open(CACHE_FILE) as f:
+            with open(CACHE_FILE, encoding="utf-8") as f:
                 data = json.load(f)
 
             return self._parse_discovery_result(data)
@@ -280,8 +268,8 @@ class EnvironmentDiscovery:
     def _save_cache(self, snapshot: EnvironmentSnapshot):
         """Save environment snapshot to cache."""
         try:
-            with open(CACHE_FILE, "w") as f:
-                # Save as discovery result format for reload compatibility
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            with open(CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump({
                     "timestamp": snapshot.timestamp.isoformat(),
                     "success": snapshot.success,
