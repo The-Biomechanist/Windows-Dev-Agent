@@ -2,7 +2,12 @@ __pycache__/
 *.pyc
 *.pyo
 .cache/
+.logs/
+agent.log
 *.egg-info/
 dist/
 build/
 .env
+.pytest_cache/
+.venv/
+.claude/settings.local.json

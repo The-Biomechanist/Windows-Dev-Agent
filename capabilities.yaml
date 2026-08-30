@@ -1,76 +1,103 @@
-lint-python:
-  description: Lint Python code using available linters
-  tools:
-    - name: ruff
-      command: ruff .
-      check: ruff --version
-    - name: pylint
-      command: pylint .
-      check: pylint --version
-
-lint-javascript:
-  description: Lint JavaScript or TypeScript code
-  tools:
-    - name: eslint
-      command: eslint .
-      check: eslint --version
-    - name: dprint
-      command: dprint check
-      check: dprint --version
-
-update-dependencies:
-  description: Update Python dependencies using uv or pip
-  tools:
-    - name: uv
-      command: uv pip sync
-      check: uv --version
-    - name: pip
-      command: pip install -U -r requirements.txt
-      check: pip --version
-
-create-pr:
-  description: Commit changes and create a pull request (stub)
-  tools:
-    - name: gh
-      command: gh pr create --fill
-      check: gh --version
-
-# -----------------------------------------------------------------------------
-# Extended capabilities ported from high‑grade agent frameworks
-#
-# The following capabilities provide simple implementations of patterns found in
-# tools like Superpowers (brainstorming, planning, test‑driven development),
-# Cline (plan/act separation), and Roo Code (role‑specific modes).  They use
-# Python one‑liners for demonstration; feel free to replace them with
-# appropriate scripts or native tooling in your environment.
-
-brainstorm:
-  description: Generate ideas and refine requirements for a task
-  tools:
-    - name: python
-      command: |
-        python -c "print('Brainstorming suggestions:\n- Break down the task into smaller units\n- Identify dependencies and constraints\n- Estimate effort and complexity\n- Consider reusable components and prior art')"
-      check: python --version
-
-write-plan:
-  description: Write a high‑level plan for a task based on brainstorming
-  tools:
-    - name: python
-      command: |
-        python -c "print('Plan:\n1. Perform discovery (gather context, list dependencies)\n2. Produce a detailed plan with subtasks and sequence\n3. Implement each subtask in a sandboxed branch\n4. Verify with tests and static analysis\n5. Integrate changes and create a pull request')"
-      check: python --version
-
-test-driven-development:
-  description: Run Python tests using pytest (test‑driven development)
-  tools:
-    - name: pytest
-      command: pytest
-      check: pytest --version
-
-debug:
-  description: Run the Python debugger on the current module (stub)
-  tools:
-    - name: python
-      command: |
-        python -c "import pdb, sys; print('Starting debugger...'); pdb.set_trace()"
-      check: python --version
+{
+  "inspect-git": {
+    "description": "Inspect the current Git working tree without mutating it.",
+    "safety": "read-only",
+    "tags": ["git", "inspection"],
+    "tools": [
+      {
+        "name": "git",
+        "argv": ["git", "status", "--short", "--branch"],
+        "check_argv": ["git", "--version"]
+      }
+    ]
+  },
+  "lint-python": {
+    "description": "Run an installed Python linter against the current project.",
+    "safety": "reversible",
+    "tags": ["python", "lint"],
+    "tools": [
+      {
+        "name": "ruff",
+        "argv": ["ruff", "check", "."],
+        "check_argv": ["ruff", "--version"],
+        "verify_argv": ["ruff", "check", "."]
+      },
+      {
+        "name": "pylint",
+        "argv": ["pylint", "."],
+        "check_argv": ["pylint", "--version"],
+        "verify_argv": ["pylint", "."]
+      }
+    ]
+  },
+  "lint-javascript": {
+    "description": "Run an installed JavaScript or TypeScript linter against the current project.",
+    "safety": "reversible",
+    "tags": ["javascript", "typescript", "lint"],
+    "tools": [
+      {
+        "name": "eslint",
+        "argv": ["eslint", "."],
+        "check_argv": ["eslint", "--version"],
+        "verify_argv": ["eslint", "."]
+      },
+      {
+        "name": "dprint",
+        "argv": ["dprint", "check"],
+        "check_argv": ["dprint", "--version"],
+        "verify_argv": ["dprint", "check"]
+      }
+    ]
+  },
+  "test-python": {
+    "description": "Run the Python test suite with pytest.",
+    "safety": "reversible",
+    "tags": ["python", "test"],
+    "tools": [
+      {
+        "name": "pytest",
+        "argv": ["pytest"],
+        "check_argv": ["pytest", "--version"],
+        "verify_argv": ["pytest"]
+      }
+    ]
+  },
+  "test-dotnet": {
+    "description": "Run the .NET test suite in the current project.",
+    "safety": "reversible",
+    "tags": ["dotnet", "test"],
+    "tools": [
+      {
+        "name": "dotnet",
+        "argv": ["dotnet", "test"],
+        "check_argv": ["dotnet", "--version"],
+        "verify_argv": ["dotnet", "test"]
+      }
+    ]
+  },
+  "build-dotnet": {
+    "description": "Build the current .NET project using the native dotnet toolchain.",
+    "safety": "reversible",
+    "tags": ["dotnet", "build"],
+    "tools": [
+      {
+        "name": "dotnet",
+        "argv": ["dotnet", "build"],
+        "check_argv": ["dotnet", "--version"],
+        "verify_argv": ["dotnet", "build", "--no-restore"]
+      }
+    ]
+  },
+  "create-pr": {
+    "description": "Create a GitHub pull request from the current branch using the GitHub CLI.",
+    "safety": "approval-required",
+    "tags": ["git", "github", "publish"],
+    "tools": [
+      {
+        "name": "gh",
+        "argv": ["gh", "pr", "create", "--fill"],
+        "check_argv": ["gh", "--version"]
+      }
+    ]
+  }
+}

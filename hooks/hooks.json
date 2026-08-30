@@ -2,22 +2,12 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__windows-dev-agent__capability_run|mcp__windows-dev-agent__package_install|mcp__windows-dev-agent__sandbox_run",
         "hooks": [
           {
             "type": "command",
-            "command": "python -m src.safety.gate --tool bash --args \"$TOOL_INPUT\"",
-            "description": "Safety gate: classify and approve/checkpoint shell commands before execution"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__windows-dev-agent__package_install",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python -m src.safety.gate --tool package_install --args \"$TOOL_INPUT\"",
-            "description": "Require explicit approval before any WinGet install"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/src/safety/gate.py\" --data-dir \"${CLAUDE_PLUGIN_DATA}\"",
+            "description": "Classify the requested action and allow, ask, or deny through Claude Code's host permission surface"
           }
         ]
       }
@@ -28,8 +18,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m src.observability.trace --event post_tool --input \"$TOOL_INPUT\" --output \"$TOOL_OUTPUT\"",
-            "description": "Emit OpenTelemetry trace for every tool use"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/src/observability/trace.py\" --data-dir \"${CLAUDE_PLUGIN_DATA}\"",
+            "description": "Append a redacted structured success event to the persistent plugin audit log"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/src/observability/trace.py\" --data-dir \"${CLAUDE_PLUGIN_DATA}\"",
+            "description": "Append a redacted structured failure event to the persistent plugin audit log"
           }
         ]
       }
@@ -40,8 +42,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m src.observability.audit_report",
-            "description": "Generate self-audit report at end of session"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/src/observability/audit_report.py\" --data-dir \"${CLAUDE_PLUGIN_DATA}\"",
+            "description": "Print a concise end-of-session audit summary"
           }
         ]
       }

@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Compile runtime
+        run: python -m compileall -q src
+      - name: Run tests
+        run: python -m pytest tests -q
+      - name: MCP preflight
+        shell: pwsh
+        run: |
+          @'
+          import asyncio
+          from src.mcp.server import handle_request
+          init = asyncio.run(handle_request({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}))
+          assert init["result"]["serverInfo"]["name"] == "windows-dev-agent"
+          tools = asyncio.run(handle_request({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
+          names = [tool["name"] for tool in tools["result"]["tools"]]
+          assert len(names) == 9, names
+          print("MCP preflight OK:", ", ".join(names))
+          '@ | python -

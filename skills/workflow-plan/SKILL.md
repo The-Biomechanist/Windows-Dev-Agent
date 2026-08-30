@@ -1,40 +1,29 @@
 ---
-description: Plan any development task before executing it. Use when given a feature request, bug to fix, refactor, or any multi-step task. Always generates a structured plan with safety classifications before touching code or running commands.
+description: Build a Windows-aware execution plan when a task has consequential dependencies, multiple phases, uncertainty that can change the route, or mutation that needs explicit verification and rollback.
 ---
 
-When planning a development task:
+# Workflow Plan
 
-## Phase 1 — Understand
-- Restate the task in your own words
-- Identify: what type of task is this? (feature, bugfix, refactor, environment, research)
-- Identify: what's the success condition?
-- Identify: what could go wrong?
+Use planning when it changes execution quality. A trivial read or obvious single reversible command does not need a multi-phase ceremony.
 
-## Phase 2 — Inspect
-- Call `env_inspect` to confirm runtime and tool availability
-- Check if the project has a `CLAUDE.md` or `.clinerules` with project-specific instructions
-- Note the project language, build system, test framework
+## Procedure
 
-## Phase 3 — Brainstorm
-- Generate 2-4 approaches
-- For each: note the Windows-native path, any WSL fallback, pros/cons
-- Prefer the most native, most auditable path
+1. **Bind the task.** State the requested outcome, exact project/host boundary, hard constraints, and what would count as success.
+2. **Inspect discriminating state.** Use `env_inspect`, `tool_discover`, or project-local reads only for facts that can change the route.
+3. **Get the runtime scaffold.** Call `workflow_plan` with the task and relevant context. Treat its candidate capability ranking as deterministic routing evidence, not as a substitute for task reasoning.
+4. **Resolve the route.** Choose the smallest coherent path that satisfies the task. If materially different mechanisms remain live, name the discriminator; do not manufacture 3–5 cosmetic alternatives.
+5. **State execution phases.** For each consequential phase include:
+   - entry state actually required;
+   - concrete action/tool;
+   - safety class;
+   - observable exit condition;
+   - rollback only when an explicit restore path exists.
+6. **Execute under the ordinary tool boundary.** Approval-required MCP calls are forced through Claude Code's host prompt by the plugin hook. Do not add a fake confirmation token or bypass the hook.
+7. **Verify before continuing.** A phase that changes upstream state invalidates downstream assumptions that depended on it; re-evaluate those dependencies rather than blindly replaying the original plan.
 
-## Phase 4 — Write the plan
-Structure as numbered phases, each with:
-```
-## Phase N: <name>
-Entry criteria: <what must be true>
-Steps:
-  1. <specific command or action> [safety: autonomous|approval-required|checkpoint]
-  2. ...
-Exit criteria: <how to verify success>
-Rollback: <how to undo>
-```
+## Stop conditions
 
-## Phase 5 — Present and confirm
-Show the full plan. Do not proceed until confirmed.
-
-## After confirmation
-Execute phase by phase. After each phase: verify exit criteria before continuing.
-If a phase fails: stop, report, do not attempt the next phase without re-planning.
+- Stop planning when further decomposition cannot change the next action or verification surface.
+- If one missing fact selects between materially different routes, obtain that fact rather than expanding the plan.
+- If execution is blocked, return the exact blocker and the smallest fact or authorization needed to continue.
+- Do not call a task complete until the requested post-state is observed.

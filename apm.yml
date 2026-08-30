@@ -1,10 +1,8 @@
 name: windows-dev-agent
 version: 0.2.0
-description: Windows-native agent orchestration plugin. PowerShell-first execution, WinGet package management, environment discovery, safety-gated workflow synthesis, and sandbox routing.
+description: Windows-native Claude Code orchestration plugin with PowerShell-first discovery, host-enforced approval gates, capability routing, package setup, and isolation.
 targets:
   - claude
-  - codex
-  - opencode
 homepage: https://github.com/The-Biomechanist/Windows-Dev-Agent
 license: MIT
 keywords:
@@ -12,7 +10,6 @@ keywords:
   - powershell
   - winget
   - wsl
-  - hyper-v
   - sandbox
   - orchestration
   - defrag

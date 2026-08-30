@@ -3,8 +3,12 @@
     "windows-dev-agent": {
       "command": "python",
       "args": ["-m", "src.mcp.server"],
-      "env": {},
-      "description": "Windows-native agent orchestration server. Exposes environment inspection, capability routing, workflow planning, sandbox execution, and package management via PowerShell and WinGet."
+      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "env": {
+        "WINDOWS_DEV_AGENT_DATA_DIR": "${CLAUDE_PLUGIN_DATA}",
+        "WINDOWS_DEV_AGENT_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
+      },
+      "description": "Windows-native agent orchestration server. Exposes environment inspection, safe capability routing, workflow planning, package setup, isolation, ecosystem inventory, and audit tools."
     }
   }
 }
