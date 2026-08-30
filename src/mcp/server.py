@@ -593,7 +593,7 @@ def _select_sandbox(environment: str, isolation_requirement: Optional[str], work
         return None, "Windows-owned WSL executable is not available for linux_compatibility", "unavailable"
     if selected == "dev_container":
         has_config = False
-        for config_path in (workspace / ".devcontainer", workspace / ".devcontainer.json"):
+        for config_path in (workspace / ".devcontainer" / "devcontainer.json", workspace / ".devcontainer.json"):
             exists, containment_error = _project_path_status(workspace, config_path)
             if containment_error:
                 return None, containment_error, "invalid_input"
