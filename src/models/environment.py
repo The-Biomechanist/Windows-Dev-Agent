@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -20,6 +21,21 @@ def availability_state(value: Optional[bool]) -> str:
     if value is False:
         return "missing"
     return "unknown"
+
+
+def parse_timestamp(value: Any) -> datetime:
+    """Parse ISO/Round-trip timestamps across the supported Python range.
+
+    Windows PowerShell's round-trip ``o`` format commonly emits seven
+    fractional-second digits. Python 3.9's ``datetime.fromisoformat`` accepts
+    microsecond precision, so trim only excess fractional precision while
+    preserving the timezone offset. ``Z`` is normalized for older Python.
+    """
+    raw = str(value or datetime.now().isoformat()).strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    raw = re.sub(r"(\.\d{6})\d+(?=(?:[+-]\d{2}:\d{2})?$)", r"\1", raw)
+    return datetime.fromisoformat(raw)
 
 
 @dataclass
@@ -260,7 +276,7 @@ class EnvironmentSnapshot:
         git = GitConfig(**dict(data.get("git", {})))
         editors = EditorAvailability(**dict(data.get("editors", {})))
         return cls(
-            timestamp=datetime.fromisoformat(data.get("timestamp", datetime.now().isoformat())),
+            timestamp=parse_timestamp(data.get("timestamp")),
             success=bool(data.get("success", False)),
             errors=list(data.get("errors", [])),
             system=system,
