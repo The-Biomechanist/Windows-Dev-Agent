@@ -44,6 +44,23 @@ MAX_SANDBOX_PAYLOAD_ENTRIES = 10_000
 MAX_SANDBOX_PAYLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB staged input budget
 MAX_JSON_CONFIG_BYTES = 2 * 1024 * 1024
 _REPARSE_POINT_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+_ROUTING_GENERIC_TOKENS = {
+    "build",
+    "check",
+    "create",
+    "current",
+    "inspect",
+    "lint",
+    "package",
+    "plan",
+    "project",
+    "route",
+    "run",
+    "setup",
+    "test",
+    "tool",
+    "workflow",
+}
 
 
 def _default_project_dir() -> Path:
@@ -95,7 +112,7 @@ TOOLS = [
     },
     {
         "name": "workflow_plan",
-        "description": "Build a deterministic capability-aware execution scaffold for a task without silently resolving tied or unavailable routes.",
+        "description": "Build a deterministic capability-aware execution scaffold for a task without silently resolving weak, tied, or unavailable routes.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -313,7 +330,17 @@ async def handle_capability_run(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _task_tokens(text: str) -> set[str]:
-    return {token.lower() for token in re.findall(r"[A-Za-z0-9_.+-]+", text) if len(token) > 1}
+    tokens: set[str] = set()
+    for raw in re.findall(r"[A-Za-z0-9_.+\-]+", text):
+        token = raw.lower()
+        pieces = [token, *re.split(r"[-_.+]+", token)]
+        for piece in pieces:
+            if len(piece) <= 1:
+                continue
+            tokens.add(piece)
+            if len(piece) > 3 and piece.endswith("s") and not piece.endswith("ss"):
+                tokens.add(piece[:-1])
+    return tokens
 
 
 async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
@@ -332,71 +359,115 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
     task_tokens = _task_tokens(task + " " + str(args.get("context", "")))
     candidates: list[dict[str, Any]] = []
     for cap_id, capability in capabilities.items():
-        haystack = _task_tokens(cap_id + " " + capability.description + " " + " ".join(capability.tags))
+        identity_tokens = _task_tokens(cap_id + " " + cap_id.replace("-", " ") + " " + " ".join(capability.tags))
+        description_tokens = _task_tokens(capability.description)
+        identity_matches = sorted(task_tokens & identity_tokens)
+        discriminating_matches = sorted(set(identity_matches) - _ROUTING_GENERIC_TOKENS)
+        description_matches = sorted(task_tokens & description_tokens)
         tool = select_available_tool(capability)
         candidates.append(
             {
                 "capability": cap_id,
-                "score": len(task_tokens & haystack),
+                "score": len(identity_matches),
+                "identity_score": len(identity_matches),
+                "discriminating_score": len(discriminating_matches),
+                "description_score": len(description_matches),
+                "identity_matches": identity_matches,
+                "discriminating_matches": discriminating_matches,
+                "description_matches": description_matches,
                 "description": capability.description,
                 "safety_class": capability.safety,
                 "available_tool": tool.name if tool else None,
                 "configured_tools": [configured.name for configured in capability.tools],
             }
         )
-    candidates.sort(key=lambda row: (-int(row["score"]), str(row["capability"])))
+    candidates.sort(
+        key=lambda row: (
+            -int(row["discriminating_score"]),
+            -int(row["identity_score"]),
+            -int(row["description_score"]),
+            str(row["capability"]),
+        )
+    )
 
     selected: Optional[dict[str, Any]] = None
     route_state = "no_match"
     route_discriminator: Optional[dict[str, Any]] = None
-    positive = [candidate for candidate in candidates if int(candidate["score"]) > 0]
-    if positive:
-        top_score = int(positive[0]["score"])
-        top = [candidate for candidate in positive if int(candidate["score"]) == top_score]
-        available_top = [candidate for candidate in top if candidate.get("available_tool")]
-        if len(available_top) == 1:
-            selected = available_top[0]
-            route_state = "selected"
-        elif len(available_top) > 1:
+    eligible = [candidate for candidate in candidates if int(candidate["discriminating_score"]) > 0]
+    if eligible:
+        top_rank = (
+            int(eligible[0]["discriminating_score"]),
+            int(eligible[0]["identity_score"]),
+            int(eligible[0]["description_score"]),
+        )
+        top = [
+            candidate
+            for candidate in eligible
+            if (
+                int(candidate["discriminating_score"]),
+                int(candidate["identity_score"]),
+                int(candidate["description_score"]),
+            ) == top_rank
+        ]
+        if len(top) > 1:
             route_state = "ambiguous"
             route_discriminator = {
-                "score": top_score,
-                "candidates": [candidate["capability"] for candidate in available_top],
-                "reason": "Multiple available capabilities have equal top routing evidence; a task-specific discriminator is required before execution.",
-            }
-        else:
-            route_state = "unavailable"
-            route_discriminator = {
-                "score": top_score,
+                "rank": list(top_rank),
                 "candidates": [candidate["capability"] for candidate in top],
-                "configured_tools": {
-                    str(candidate["capability"]): list(candidate["configured_tools"])
+                "availability": {
+                    str(candidate["capability"]): candidate.get("available_tool")
                     for candidate in top
                 },
-                "reason": "The strongest-matching capability has no configured executable currently available; do not silently fall through to a weaker semantic match.",
+                "reason": "Multiple capabilities have equal strongest task evidence. Tool availability is an execution prerequisite, not evidence that resolves the semantic route.",
+            }
+        else:
+            strongest = top[0]
+            if strongest.get("available_tool"):
+                selected = strongest
+                route_state = "selected"
+            else:
+                route_state = "unavailable"
+                route_discriminator = {
+                    "rank": list(top_rank),
+                    "candidates": [strongest["capability"]],
+                    "configured_tools": {
+                        str(strongest["capability"]): list(strongest["configured_tools"])
+                    },
+                    "reason": "The uniquely strongest semantic route has no configured executable currently available; do not silently fall through to a weaker match.",
+                }
+    else:
+        weak = [
+            candidate
+            for candidate in candidates
+            if int(candidate["identity_score"]) > 0 or int(candidate["description_score"]) > 0
+        ]
+        if weak:
+            route_discriminator = {
+                "candidates": [candidate["capability"] for candidate in weak[:5]],
+                "reason": "Only generic identity overlap or description-only similarity was observed. That evidence is insufficient for deterministic capability selection.",
             }
 
     if selected:
         route_action = f"Select capability {selected['capability']}"
-        route_exit = "One executable route and its authority class are explicit"
+        route_exit = "One semantically distinguished executable route and its authority class are explicit"
         execute_entry = "The selected route's concrete executing tool call is ready for host permission policy"
         execute_action = "Execute the selected capability or explicitly authorized tool path"
         execute_safety = str(selected["safety_class"])
     elif route_state == "ambiguous":
-        route_action = "Resolve the task-specific discriminator between the equal top capability matches before choosing a route"
-        route_exit = "No executable route is selected until the ambiguity is resolved"
+        route_action = "Resolve the task-specific discriminator between the equal strongest capability matches before choosing a route"
+        route_exit = "No executable route is selected until the semantic ambiguity is resolved"
         execute_entry = "Blocked until the route phase selects one executable path"
         execute_action = "Do not execute from this scaffold yet"
         execute_safety = "approval-required"
     elif route_state == "unavailable":
-        route_action = "Establish the required tool for the strongest-matching capability or explicitly choose a different route; do not substitute a weaker match automatically"
+        route_action = "Establish an executable tool for the uniquely strongest route or explicitly choose a different supported route; do not substitute a weaker match automatically"
         route_exit = "No executable route is selected until availability or route intent changes"
         execute_entry = "Blocked until the route phase selects one executable path"
         execute_action = "Do not execute from this scaffold yet"
         execute_safety = "approval-required"
     else:
-        route_action = "Choose a capability or ordinary tool path only after evidence distinguishes a supported route"
-        route_exit = "No executable route is selected without positive routing evidence"
+        route_action = "Choose a capability or ordinary tool path only after task evidence distinguishes a supported route"
+        route_exit = "No executable route is selected from generic or description-only overlap"
         execute_entry = "Blocked until the route phase selects one executable path"
         execute_action = "Do not execute from this scaffold yet"
         execute_safety = "approval-required"
