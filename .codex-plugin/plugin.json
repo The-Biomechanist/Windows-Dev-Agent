@@ -1,7 +1,7 @@
 {
   "name": "windows-dev-agent",
-  "version": "0.4.1",
-  "description": "Windows-native development orchestration for Codex and ChatGPT desktop with truth-preserving discovery, host-owned approval, package setup, isolation, and ecosystem cleanup.",
+  "version": "0.4.2",
+  "description": "Windows-native development orchestration for Codex and ChatGPT desktop with truth-preserving discovery, plan-state binding, host-owned approval, package setup, isolation, and ecosystem cleanup.",
   "author": {"name": "The-Biomechanist", "url": "https://github.com/The-Biomechanist"},
   "homepage": "https://github.com/The-Biomechanist/Windows-Dev-Agent",
   "repository": "https://github.com/The-Biomechanist/Windows-Dev-Agent",
