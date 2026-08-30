@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 from xml.sax.saxutils import escape as xml_escape
 
 from src import __version__
@@ -30,6 +30,7 @@ from src.capabilities import (
     run_capability,
     select_available_tool,
 )
+from src.observability.trace import history_log_files
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -41,6 +42,7 @@ ENVIRONMENT_CACHE_FILE = DATA_DIR / "environment.json"
 MAX_SANDBOX_PAYLOAD_ENTRIES = 10_000
 MAX_SANDBOX_PAYLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB staged input budget
 MAX_JSON_CONFIG_BYTES = 2 * 1024 * 1024
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 
 def _default_project_dir() -> Path:
@@ -92,7 +94,7 @@ TOOLS = [
     },
     {
         "name": "workflow_plan",
-        "description": "Build a deterministic capability-aware execution scaffold for a task.",
+        "description": "Build a deterministic capability-aware execution scaffold for a task without collapsing tied or unavailable routes into a false selection.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -166,7 +168,7 @@ TOOLS = [
     },
     {
         "name": "logs_query",
-        "description": "Query minimal persistent Windows Dev Agent audit metadata across recorded sessions.",
+        "description": "Query minimal persistent Windows Dev Agent audit metadata across all currently retained log segments.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -345,7 +347,43 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
                 "available_tool": tool.name if tool else None,
             }
         )
-    selected = candidates[0] if candidates and candidates[0]["score"] > 0 else None
+
+    top_score = candidates[0]["score"] if candidates else 0
+    top_candidates = [candidate for candidate in candidates if candidate["score"] == top_score] if top_score > 0 else []
+    matched_candidate = top_candidates[0] if len(top_candidates) == 1 else None
+    if top_score <= 0:
+        selection_status = "no_match"
+        selected = None
+    elif len(top_candidates) > 1:
+        selection_status = "ambiguous"
+        selected = None
+    elif matched_candidate and matched_candidate["available_tool"] is None:
+        selection_status = "matched_unavailable"
+        selected = None
+    else:
+        selection_status = "selected"
+        selected = matched_candidate
+
+    if selected:
+        route_action = f"Select capability {selected['capability']}"
+        execute_action = "Execute the selected capability or explicitly authorized tool path"
+        execute_safety = selected["safety_class"]
+    elif selection_status == "ambiguous":
+        route_action = "Preserve the tied top capability candidates and obtain a discriminator before selecting one"
+        execute_action = "Do not execute until the routing ambiguity is resolved"
+        execute_safety = "unresolved"
+    elif selection_status == "matched_unavailable" and matched_candidate:
+        route_action = (
+            f"Capability {matched_candidate['capability']} is the unique semantic match, but none of its configured tools are available; "
+            "establish an executable tool or choose another supported route"
+        )
+        execute_action = "Do not execute until an available route is established"
+        execute_safety = "unresolved"
+    else:
+        route_action = "Choose the smallest supported route from observed evidence"
+        execute_action = "Do not execute until a supported route is established"
+        execute_safety = "unresolved"
+
     phases = [
         {
             "phase": "inspect",
@@ -357,16 +395,16 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
         {
             "phase": "route",
             "entry": "Discriminating state is available",
-            "action": f"Select capability {selected['capability']}" if selected else "Choose the smallest supported route from observed evidence",
-            "exit": "One executable route and its authority class are explicit",
+            "action": route_action,
+            "exit": "One executable route is selected or the exact routing blocker remains explicit",
             "safety_class": "read-only",
         },
         {
             "phase": "execute",
-            "entry": "The concrete executing tool call is ready for host permission policy",
-            "action": "Execute the selected capability or explicitly authorized tool path",
+            "entry": "An executable route has been selected",
+            "action": execute_action,
             "exit": "The action returns an observable result",
-            "safety_class": selected["safety_class"] if selected else "approval-required",
+            "safety_class": execute_safety,
         },
         {
             "phase": "verify",
@@ -380,6 +418,8 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
         "status": "planned",
         "task": task,
         "project_dir": str(project),
+        "selection_status": selection_status,
+        "matched_candidate": matched_candidate,
         "selected_candidate": selected,
         "candidate_capabilities": candidates,
         "phases": phases,
@@ -484,6 +524,28 @@ def _select_sandbox(environment: str, isolation_requirement: Optional[str], work
     return None, f"Unsupported isolation requirement: {isolation_requirement}"
 
 
+def _is_reparse_point(path: Path) -> bool:
+    """Return whether a Windows path is an NTFS reparse point without following it."""
+    try:
+        stat_result = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    attributes = int(getattr(stat_result, "st_file_attributes", 0) or 0)
+    return bool(attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _walk_payload(root: Path) -> Iterator[Path]:
+    """Walk a payload root without descending before the caller can reject a boundary."""
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        yield current
+        if current.is_dir():
+            with os.scandir(current) as entries:
+                children = [Path(entry.path) for entry in entries]
+            stack.extend(reversed(children))
+
+
 def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[Path, Path]]], Optional[str]]:
     if value is None:
         value = []
@@ -509,38 +571,34 @@ def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[P
         ):
             return None, f"payload paths overlap or duplicate one another: {raw}"
 
-        source = (workspace / rel).resolve()
-        try:
-            source.relative_to(workspace)
-        except ValueError:
-            return None, f"payload path escapes the workspace: {raw}"
+        source = workspace / rel
         if not source.exists():
             return None, f"payload path does not exist: {raw}"
+        if source.is_symlink() or _is_reparse_point(source):
+            return None, f"payload path is a symbolic link or reparse point: {raw}"
+        try:
+            source.resolve().relative_to(workspace)
+        except ValueError:
+            return None, f"payload path escapes the workspace: {raw}"
 
-        candidates = (candidate for candidate in ([source] if not source.is_dir() else [source]))
-        if source.is_dir():
-            candidates = iter((source, *()))
-            # Chain lazily without materializing the directory tree.
-            from itertools import chain
-            candidates = chain((source,), source.rglob("*"))
-
-        for candidate in candidates:
-            total_entries += 1
-            if total_entries > MAX_SANDBOX_PAYLOAD_ENTRIES:
-                return None, "payload selection exceeds the Sandbox staging entry budget"
-            if candidate.is_symlink():
-                return None, f"payload contains a symbolic link: {candidate}"
-            try:
-                candidate.resolve().relative_to(workspace)
-            except ValueError:
-                return None, f"payload contains a path that escapes the workspace: {candidate}"
-            if candidate.is_file():
+        try:
+            candidates = _walk_payload(source)
+            for candidate in candidates:
+                total_entries += 1
+                if total_entries > MAX_SANDBOX_PAYLOAD_ENTRIES:
+                    return None, "payload selection exceeds the Sandbox staging entry budget"
+                if candidate.is_symlink() or _is_reparse_point(candidate):
+                    return None, f"payload contains a symbolic link or reparse point: {candidate}"
                 try:
+                    candidate.resolve().relative_to(workspace)
+                except ValueError:
+                    return None, f"payload contains a path that escapes the workspace: {candidate}"
+                if candidate.is_file():
                     total_bytes += candidate.stat().st_size
-                except OSError as exc:
-                    return None, f"payload size could not be established for {candidate}: {exc}"
-                if total_bytes > MAX_SANDBOX_PAYLOAD_BYTES:
-                    return None, "payload selection exceeds the Sandbox staging byte budget"
+                    if total_bytes > MAX_SANDBOX_PAYLOAD_BYTES:
+                        return None, "payload selection exceeds the Sandbox staging byte budget"
+        except OSError as exc:
+            return None, f"payload could not be enumerated safely: {exc}"
 
         selected_parts.append(rel_parts)
         sources.append((source, rel))
@@ -839,16 +897,15 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_log_events() -> list[dict[str, Any]]:
-    if not LOG_FILE.exists():
-        return []
-    events = []
-    for line in LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            events.append(value)
+    events: list[dict[str, Any]] = []
+    for source in history_log_files(LOG_FILE):
+        for line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                events.append(value)
     return events
 
 
