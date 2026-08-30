@@ -1,0 +1,60 @@
+# Changelog
+
+All notable Windows Dev Agent changes are recorded here. The repository uses semantic versioning for public plugin/runtime releases.
+
+## 0.5.0 — Unreleased
+
+Production-hardening and public-release cleanup.
+
+### Runtime and bootstrap
+
+- Raise the supported Python floor to 3.11.
+- Add an isolated Windows-native Python launcher that avoids project/PATH executable shadowing and supports only an explicit absolute host override.
+- Remove MCP startup dependence on process `cwd`.
+- Consolidate Claude and Codex onto one bounded stdio transport.
+- Add strict runtime MCP argument validation and request/resource bounds.
+- Remove the directly executable host-neutral MCP core path.
+- Consolidate captured external execution into a bounded streaming runner and execute the exact resolved executable identity.
+- Resolve Windows-owned control-plane binaries from the Windows system installation rather than PATH.
+
+### Isolation
+
+- Require an explicit semantic isolation requirement for every `sandbox_run` call.
+- Reject explicit backend/requirement combinations that do not provide the requested property.
+- Require payload staging for every `untrusted_windows` request.
+- Disable vGPU, networking, audio input, video input, printer redirection, and clipboard redirection for the hostile-Windows route.
+- Keep generated `.wsb` configuration outside the mapped read-only Sandbox share.
+- Make WDA own Sandbox bundle cleanup and stale-bundle collection.
+
+### State, security, and observability
+
+- Apply symlink/reparse containment to project-local configuration reads.
+- Make discovery failures return the canonical snapshot shape.
+- Add bounded atomic discovery cache writes and mutation-generation protection against stale cache resurrection.
+- Serialize audit rotation/append between Windows hook processes.
+- Add audit schema version and explicit lifecycle fields while preserving legacy log readability.
+- Stop exposing the physical WDA data directory from `logs_query`.
+- Separate host-neutral safety classification from Claude's hook adapter.
+
+### Cleanup and release
+
+- Rename `capabilities.yaml` to the format-accurate `capabilities.json`.
+- Remove legacy command aliases, the duplicate Windows orchestrator agent, unused APM metadata, empty runtime requirements metadata, unused runtime-path helpers, and release-history naming residue from tests.
+- Rewrite public documentation around installation, capabilities, boundaries, limitations, and development.
+- Add `SECURITY.md`.
+- Update Windows CI to test Python 3.11 and 3.14 and verify immutable published release ancestry without freezing later development to the last payload.
+
+## 0.4.3
+
+Runtime authority repair release.
+
+- Bound Claude project-scoped calls to the host-supplied project root.
+- Required authoritative Codex session scope for trusted plan shortcuts.
+- Preserved unknown external-process outcomes instead of collapsing them into failure.
+- Kept discovery failure responses in the canonical degraded snapshot shape.
+- Made WinGet installs noninteractive and source-bound.
+- Published the Codex marketplace entry as an index-only commit pinned to an immutable index-free payload commit.
+
+## 0.4.2
+
+Runtime-integrity release that established the shared Claude/Codex architecture, retained-history audit model, executable-identity checks, and Windows NTFS/reparse containment foundations used by later hardening.
