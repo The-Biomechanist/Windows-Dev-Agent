@@ -3,9 +3,10 @@
 Codex owns prompting. This hook may auto-allow only requests whose safety can be
 established from the PermissionRequest event itself. The event supplies the
 active session ``cwd``; project-scoped plan calls are auto-allowed only when the
-caller-supplied project path stays inside that boundary. Plans that enumerate
-project files (notably ``sandbox_run``), executing mutations, broader reads, and
-path mismatches continue to Codex's normal approval UI.
+caller-supplied absolute project path resolves inside that boundary. Plans that
+enumerate project files (notably ``sandbox_run``), executing mutations, broader
+reads, relative project identities, and path mismatches continue to Codex's
+normal approval UI.
 """
 
 from __future__ import annotations
@@ -35,19 +36,17 @@ PROJECT_PLAN_ARGS = {
 
 
 def _inside_session_cwd(event: dict[str, Any], tool_input: dict[str, Any], argument: str) -> bool:
-    """Prove a caller path resolves no broader than Codex's active cwd.
-
-    Both paths are resolved through the host filesystem before comparison so a
-    junction/symlink inside the lexical project cannot silently escape the
-    trusted session boundary.
-    """
+    """Prove an absolute caller path resolves no broader than Codex's active cwd."""
     session_cwd = str(event.get("cwd", "")).strip()
     requested = str(tool_input.get(argument, "")).strip()
     if not session_cwd or not requested:
         return False
     try:
         root = Path(session_cwd).expanduser().resolve()
-        candidate = Path(requested).expanduser().resolve()
+        requested_path = Path(requested).expanduser()
+        if not requested_path.is_absolute():
+            return False
+        candidate = requested_path.resolve()
         candidate.relative_to(root)
         return True
     except (OSError, RuntimeError, ValueError):
