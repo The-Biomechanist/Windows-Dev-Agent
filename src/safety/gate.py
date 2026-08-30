@@ -102,8 +102,13 @@ def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
     if short_name is None:
         return "approval-required"
 
-    if short_name in {"env_inspect", "tool_discover", "workflow_plan", "package_search", "logs_query"}:
+    # These are pure in-process/built-in reads. tool_discover and package_search
+    # intentionally stay approval-required because they execute PATH-resolved
+    # binaries/package managers even though their requested effect is diagnostic.
+    if short_name in {"env_inspect", "workflow_plan", "logs_query"}:
         return "read-only"
+    if short_name in {"tool_discover", "package_search"}:
+        return "approval-required"
     if short_name == "ecosystem_scan":
         return "approval-required" if bool(tool_input.get("include_host", False)) else "read-only"
     if short_name == "mcp_audit":
