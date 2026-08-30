@@ -1,5 +1,6 @@
 """Tests for the small runtime capability registry."""
 
+import json
 from pathlib import Path
 import sys
 
@@ -9,18 +10,22 @@ from src.capabilities import CapabilityConfigError, load_capabilities, run_capab
 
 
 def _write_catalog(path: Path, safety: str = "reversible") -> None:
-    executable = sys.executable.replace("\\", "\\\\")
     path.write_text(
-        f"""
-probe:
-  description: Test capability
-  safety: {safety}
-  tools:
-    - name: python
-      argv: [\"{executable}\", \"-c\", \"print('runtime-ok')\"]
-      check_argv: [\"{executable}\", \"--version\"]
-""".strip()
-        + "\n",
+        json.dumps(
+            {
+                "probe": {
+                    "description": "Test capability",
+                    "safety": safety,
+                    "tools": [
+                        {
+                            "name": "python",
+                            "argv": [sys.executable, "-c", "print('runtime-ok')"],
+                            "check_argv": [sys.executable, "--version"],
+                        }
+                    ],
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -37,6 +42,13 @@ def test_invalid_safety_fails_closed(tmp_path: Path):
     catalog = tmp_path / "capabilities.yaml"
     _write_catalog(catalog, "totally-safe-trust-me")
     with pytest.raises(CapabilityConfigError):
+        load_capabilities(catalog)
+
+
+def test_non_json_yaml_extension_is_rejected_without_optional_parser(tmp_path: Path):
+    catalog = tmp_path / "capabilities.yaml"
+    catalog.write_text("probe:\n  description: ordinary-yaml\n", encoding="utf-8")
+    with pytest.raises(CapabilityConfigError, match="JSON-compatible YAML"):
         load_capabilities(catalog)
 
 
