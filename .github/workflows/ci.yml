@@ -15,6 +15,8 @@ jobs:
         python-version: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
@@ -54,4 +56,34 @@ jobs:
               names = [tool["name"] for tool in tools["result"]["tools"]]
               assert names == expected, (host, names)
               print(f"{host} MCP preflight OK:", ", ".join(names))
+          '@ | python -
+      - name: Release index identity
+        shell: pwsh
+        run: |
+          @'
+          import json
+          from pathlib import Path
+          import re
+          import subprocess
+
+          index = Path(".agents/plugins/marketplace.json")
+          if not index.exists():
+              print("No marketplace index in immutable plugin payload; nothing to verify.")
+              raise SystemExit(0)
+
+          market = json.loads(index.read_text(encoding="utf-8"))
+          source = market["plugins"][0]["source"]
+          sha = source.get("sha", "")
+          assert re.fullmatch(r"[0-9a-f]{40}", sha), source
+          assert "ref" not in source, source
+          pinned_manifest = json.loads(
+              subprocess.check_output(
+                  ["git", "show", f"{sha}:.codex-plugin/plugin.json"],
+                  text=True,
+              )
+          )
+          current_manifest = json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8"))
+          assert pinned_manifest["name"] == current_manifest["name"] == "windows-dev-agent"
+          assert pinned_manifest["version"] == current_manifest["version"]
+          print(f"Marketplace pins verified payload {sha} version {pinned_manifest['version']}")
           '@ | python -
