@@ -27,9 +27,32 @@ def test_package_install_refuses_execution_when_cache_invalidation_fails(monkeyp
     assert "cache" in result["error"].lower()
 
 
+def test_devcontainer_route_requires_actual_configuration_file(monkeypatch, tmp_path: Path):
+    (tmp_path / ".devcontainer").mkdir()
+    monkeypatch.setattr(server, "resolve_executable", lambda name: r"C:\trusted\devcontainer.exe" if name == "devcontainer" else None)
+
+    environment, error, status = server._select_sandbox(
+        "auto", "project_reproducibility", tmp_path.resolve()
+    )
+    assert environment is None
+    assert status == "unavailable"
+    assert "configured Dev Container" in (error or "")
+
+    config = tmp_path / ".devcontainer" / "devcontainer.json"
+    config.write_text('{"image":"example"}', encoding="utf-8")
+    environment, error, status = server._select_sandbox(
+        "auto", "project_reproducibility", tmp_path.resolve()
+    )
+    assert environment == "dev_container"
+    assert error is None
+    assert status is None
+
+
 def test_devcontainer_route_rejects_project_reparse_configuration(monkeypatch, tmp_path: Path):
-    config = tmp_path / ".devcontainer"
-    config.mkdir()
+    config_dir = tmp_path / ".devcontainer"
+    config_dir.mkdir()
+    config = config_dir / "devcontainer.json"
+    config.write_text('{"image":"example"}', encoding="utf-8")
     monkeypatch.setattr(server, "resolve_executable", lambda name: r"C:\trusted\devcontainer.exe" if name == "devcontainer" else None)
 
     original = server._project_path_status
