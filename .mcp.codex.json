@@ -7,10 +7,11 @@
       "-ExecutionPolicy",
       "Bypass",
       "-File",
-      "${PLUGIN_ROOT}/scripts/launch-python.ps1",
+      "scripts/launch-python.ps1",
       "-Module",
       "src.codex_server"
     ],
+    "cwd": ".",
     "env": {"WINDOWS_DEV_AGENT_HOST": "codex"},
     "tool_timeout_sec": 610,
     "default_tools_approval_mode": "prompt",
