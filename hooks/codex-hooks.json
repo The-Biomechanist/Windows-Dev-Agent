@@ -1,5 +1,5 @@
 {
-  "description": "Codex host hooks for Windows Dev Agent. Native Codex policy remains authoritative; trusted hooks deny forbidden actions, auto-approve plan-only calls, and auto-approve only project-bounded ecosystem/MCP reads.",
+  "description": "Codex host hooks for Windows Dev Agent. Native Codex policy remains authoritative; trusted hooks deny forbidden actions and auto-approve only plan-first non-executing MCP calls.",
   "hooks": {
     "PreToolUse": [
       {
@@ -17,14 +17,14 @@
     ],
     "PermissionRequest": [
       {
-        "matcher": "^mcp__windows_dev_agent__(capability_run|package_install|sandbox_run|ecosystem_scan|mcp_audit)$",
+        "matcher": "^mcp__windows_dev_agent__(capability_run|package_install|sandbox_run)$",
         "hooks": [
           {
             "type": "command",
             "command": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\"",
             "commandWindows": "python \"${PLUGIN_ROOT}/src/safety/codex_permission.py\"",
             "timeout": 30,
-            "description": "Allow only plan-only or project-bounded read requests; defer execution and broader reads to Codex approval"
+            "description": "Allow only plan-first execute=false calls; defer execution and filesystem inventory reads to Codex approval"
           }
         ]
       }
