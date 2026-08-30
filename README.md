@@ -2,7 +2,7 @@
 
 Windows-native developer orchestration for **Claude Code and Codex**, built around one shared runtime and six shared procedural skills.
 
-Version **0.4.0** tightens the package around observable state and host-owned authority: environment discovery preserves unknown probe state, executing MCP calls use one real host permission boundary, Windows Sandbox stages the selected workload into the isolated VM, audit summaries keep unknown outcomes explicit, and user-level inventory is separated from project-local reads.
+Version **0.4.1** closes three post-0.4 integrity seams: deterministic workflow routing now requires discriminating capability evidence and preserves semantic ties, `logs_query` reads the complete bounded retained history across log rotation, and Windows Sandbox staging rejects NTFS reparse-point boundaries such as junctions before traversal crosses them. The 0.4 authority, tri-state discovery, execution-outcome, and immutable-release contracts remain intact.
 
 ## Architecture
 
@@ -80,12 +80,12 @@ Both adapters expose the same ten tools:
 | `env_inspect` | Native Windows environment snapshot with time-bound cache and `force_refresh`. |
 | `tool_discover` | Focused executable/version discovery. |
 | `capability_run` | Plan or execute one registered argv-based capability. |
-| `workflow_plan` | Deterministic capability-aware execution scaffold. |
+| `workflow_plan` | Deterministic capability-aware scaffold that preserves weak, tied, unavailable, and selected route states. |
 | `package_search` | Resolve package identity before mutation. |
 | `package_install` | Plan or execute one exact WinGet/Chocolatey/Scoop install. |
 | `sandbox_run` | Route and optionally launch WSL, Dev Container, or Windows Sandbox execution. |
 | `ecosystem_scan` | Project-local agent/tool inventory by default; optional broader host inventory. |
-| `logs_query` | Query bounded persistent WDA audit metadata. |
+| `logs_query` | Query bounded retained WDA audit metadata across the current log and rotated predecessor. |
 | `mcp_audit` | Inspect project MCP configuration by default; broader reads are explicit. |
 
 ## Authority model
@@ -143,6 +143,10 @@ Discovery intentionally does **not** persist username/domain, Git user identity,
 
 `package_install(execute:false)` returns the concrete argv for review. `execute:true` requests that exact mutation under the active host permission policy. Installer exit is not treated as proof that the requested task now works; verify executable/version/task state afterward.
 
+## Workflow routing
+
+`workflow_plan` separates semantic route evidence from execution availability. Capability ID/tag overlap supplies deterministic routing evidence; description-only similarity and generic operation words such as “run” or “test” do not select a capability by themselves. Equal strongest semantic matches remain `ambiguous` even when only one backend happens to be installed. A uniquely strongest match with no executable is `unavailable`; it does not silently fall through to a weaker match.
+
 ## Isolation
 
 `environment:auto` requires an `isolation_requirement`:
@@ -157,11 +161,13 @@ WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by de
 
 A hostile Windows workload is not isolated merely because a Sandbox window launches. For `untrusted_windows`, supply workspace-relative `payload_paths` identifying the files/directories the inner command actually needs. The runtime:
 
-1. rejects absolute paths, `..` escapes, missing paths, symbolic-link escapes, overlapping selections, payloads over 10,000 filesystem entries, and payloads over 1 GiB total file bytes;
+1. rejects absolute paths, `..` escapes, missing paths, symbolic links, NTFS reparse-point boundaries including junctions, overlapping selections, payloads over 10,000 filesystem entries, and payloads over 1 GiB total file bytes;
 2. stages the selected payload into a temporary bundle;
 3. maps only that generated bundle into Windows Sandbox, read-only;
 4. disables Sandbox networking and clipboard;
 5. runs the inner command from `C:\WDAShare\payload`.
+
+Selected path components are checked before resolution and directory children are surfaced for boundary inspection before traversal descends, so a reparse parent cannot be crossed merely because its eventual target resolves inside the workspace.
 
 Planning does not materialize the bundle. An executing Sandbox call returns `launched` plus `cleanup_path`; that establishes launch only. Inner command success remains unknown until observed from inside the Sandbox. If staging or process launch fails before the Sandbox starts, the partial temporary bundle is removed automatically.
 
@@ -187,7 +193,7 @@ For execution-capable calls, the audit representation distinguishes:
 
 Codex PostToolUse may inspect the WDA MCP result **in memory** to derive that small status, then discards the raw response. A Windows Sandbox launch therefore remains `unknown`, never “zero failures.”
 
-`agent.log` is bounded to 2 MiB and one rotated predecessor (`agent.log.1`). Environment cache and audit state live outside the immutable plugin code tree.
+`agent.log` is bounded to 2 MiB and one rotated predecessor (`agent.log.1`). Audit reports and `logs_query` both consume those retained segments in chronological order. Environment cache and audit state live outside the immutable plugin code tree.
 
 ## Capability catalog
 
@@ -200,12 +206,12 @@ The current catalog covers Git inspection, Python/JavaScript linting, Python/.NE
 GitHub Actions runs on `windows-latest` across Python **3.9** and **3.13** and checks:
 
 1. Python runtime compilation;
-2. the contract-focused pytest suite;
+2. the contract-focused pytest suite, including a real Windows junction containment witness;
 3. the **actual shipped PowerShell discovery producer** on the Windows runner;
 4. exact MCP initialization/version/tool surfaces for Claude and Codex;
-5. when the canonical release index is present, that its immutable SHA resolves to a Codex plugin manifest with the same published version.
+5. when the canonical release index is present, that its immutable SHA resolves to a Codex plugin manifest with the same published version and is byte-identical to the current release tree outside the index itself.
 
-The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness, Sandbox payload staging/path/resource containment, WSL project binding, audit outcome uncertainty/retention, MCP summary minimization, host adapter wiring, and MCP transport isolation.
+The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness, route discrimination, Sandbox payload staging/path/resource/reparse containment, WSL project binding, audit outcome uncertainty/retention, MCP summary minimization, host adapter wiring, and MCP transport isolation.
 
 For local development:
 
