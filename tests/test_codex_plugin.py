@@ -150,20 +150,19 @@ def test_codex_gate_denies_forbidden_but_never_emulates_ask(monkeypatch):
     assert forbidden["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_codex_permission_request_allows_only_plan_or_bounded_read(monkeypatch):
+def test_codex_permission_request_auto_allows_only_plan_first_calls(monkeypatch):
     monkeypatch.setattr(codex_permission, "append_event", lambda *_args, **_kwargs: None)
     package = CODEX_PREFIX + "package_install"
     planned = codex_permission.evaluate_permission_request({"tool_name": package, "tool_input": {"package_id": "Python.Python.3.12", "execute": False}})
     assert planned["hookSpecificOutput"]["decision"]["behavior"] == "allow"
     assert codex_permission.evaluate_permission_request({"tool_name": package, "tool_input": {"package_id": "Python.Python.3.12", "execute": True}}) is None
 
+    # A caller-supplied cwd cannot be proven to be the active Codex project, so
+    # filesystem inventory reads stay on Codex's native approval UI.
     ecosystem = CODEX_PREFIX + "ecosystem_scan"
-    assert codex_permission.evaluate_permission_request({"tool_name": ecosystem, "tool_input": {"include_host": False}})["hookSpecificOutput"]["decision"]["behavior"] == "allow"
-    assert codex_permission.evaluate_permission_request({"tool_name": ecosystem, "tool_input": {"include_host": True}}) is None
-
+    assert codex_permission.evaluate_permission_request({"tool_name": ecosystem, "tool_input": {"cwd": "C:\\project", "include_host": False}}) is None
     audit = CODEX_PREFIX + "mcp_audit"
-    assert codex_permission.evaluate_permission_request({"tool_name": audit, "tool_input": {"include_host": False}})["hookSpecificOutput"]["decision"]["behavior"] == "allow"
-    assert codex_permission.evaluate_permission_request({"tool_name": audit, "tool_input": {"config_path": "C:\\other\\mcp.json"}}) is None
+    assert codex_permission.evaluate_permission_request({"tool_name": audit, "tool_input": {"cwd": "C:\\project", "include_host": False}}) is None
 
 
 def test_codex_hook_config_uses_native_contract_and_no_cross_process_plugin_data_assumption():
@@ -172,7 +171,11 @@ def test_codex_hook_config_uses_native_contract_and_no_cross_process_plugin_data
     assert "permissionDecision: ask" not in raw
     assert "windows_dev_agent" in config["hooks"]["PreToolUse"][0]["matcher"]
     permission_matcher = config["hooks"]["PermissionRequest"][0]["matcher"]
-    assert "ecosystem_scan" in permission_matcher and "mcp_audit" in permission_matcher
+    assert "capability_run" in permission_matcher
+    assert "package_install" in permission_matcher
+    assert "sandbox_run" in permission_matcher
+    assert "ecosystem_scan" not in permission_matcher
+    assert "mcp_audit" not in permission_matcher
     commands = [
         hook["command"]
         for entries in config["hooks"].values()
