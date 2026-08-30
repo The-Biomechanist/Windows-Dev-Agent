@@ -7,7 +7,7 @@ description: Resolve and install Windows packages or tools through Windows Dev A
 
 Package installation is `approval-required`. The executing MCP call contains the reviewed mutation and `execute: true`; the active host asks for permission around that same call. Do not invent a second model-supplied flag that claims approval happened before the host has actually asked.
 
-In Codex, `package_install` uses native MCP `prompt` policy. When the optional plugin hooks are trusted, `execute: false` plan calls may be auto-approved by `PermissionRequest`; without trusted hooks, Codex may prompt for the plan too. Either way, executing calls remain host-controlled.
+`package_search` is non-mutating by intent, but it executes the selected package manager and may contact its configured source. It therefore remains on the active host permission surface rather than being silently auto-approved. `package_install` also remains host-controlled; in Codex, only `execute: false` plan calls may be auto-approved by the optional trusted `PermissionRequest` hook.
 
 ## Procedure
 
