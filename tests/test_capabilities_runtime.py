@@ -50,23 +50,45 @@ def test_non_json_yaml_extension_is_rejected_without_optional_parser(tmp_path: P
         load_capabilities(catalog)
 
 
-def test_plan_does_not_execute(tmp_path: Path):
+def test_plan_does_not_execute_and_binds_concrete_executable(tmp_path: Path):
     catalog = tmp_path / "capabilities.yaml"
     _write_catalog(catalog)
     result = run_capability("probe", execute=False, path=catalog)
     assert result["status"] == "planned"
     assert result["safety_class"] == "reversible"
     assert result["requires_host_approval"] is True
+    assert result["resolved_executable"]
+    assert result["argv"][0] == result["resolved_executable"]
+    assert len(result["plan_fingerprint"]) == 64
     assert "stdout" not in result
 
 
 def test_execute_request_has_no_model_supplied_approval_bit(tmp_path: Path):
     catalog = tmp_path / "capabilities.yaml"
     _write_catalog(catalog, "approval-required")
-    result = run_capability("probe", execute=True, path=catalog)
+    plan = run_capability("probe", execute=False, path=catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        path=catalog,
+        plan_fingerprint=plan["plan_fingerprint"],
+    )
     assert result["status"] == "completed"
     assert result["execution_started"] is True
     assert "runtime-ok" in result["stdout"]
+
+
+def test_execute_without_fresh_plan_fingerprint_does_not_start(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.yaml"
+    _write_catalog(catalog, "read-only")
+    monkeypatch.setattr(
+        capabilities.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not execute")),
+    )
+    result = run_capability("probe", execute=True, path=catalog)
+    assert result["status"] == "stale_plan"
+    assert result["execution_started"] is False
 
 
 def test_extra_args_upgrade_effective_safety(tmp_path: Path):
@@ -105,20 +127,58 @@ def test_capability_subprocess_cannot_consume_mcp_stdin(tmp_path: Path, monkeypa
         return Result()
 
     monkeypatch.setattr(capabilities.subprocess, "run", fake_run)
-    result = run_capability("probe", execute=True, path=catalog)
+    plan = run_capability("probe", execute=False, path=catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        path=catalog,
+        plan_fingerprint=plan["plan_fingerprint"],
+    )
     assert result["status"] == "completed"
     assert observed["stdin"] is capabilities.subprocess.DEVNULL
+    assert observed["argv"][0] == plan["resolved_executable"]
+
+
+def test_changed_executable_resolution_invalidates_plan(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.yaml"
+    _write_catalog(catalog, "read-only")
+    first = tmp_path / "first-python.exe"
+    second = tmp_path / "second-python.exe"
+    resolutions = iter((str(first), str(second)))
+    monkeypatch.setattr(capabilities.shutil, "which", lambda _name: next(resolutions))
+    monkeypatch.setattr(
+        capabilities.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stale plan must not execute")),
+    )
+    plan = run_capability("probe", execute=False, path=catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        path=catalog,
+        plan_fingerprint=plan["plan_fingerprint"],
+    )
+    assert result["status"] == "stale_plan"
+    assert result["execution_started"] is False
+    assert result["resolved_executable"] != plan["resolved_executable"]
+    assert result["submitted_plan_fingerprint"] == plan["plan_fingerprint"]
 
 
 def test_oserror_before_process_start_is_not_reported_as_executed(tmp_path: Path, monkeypatch):
     catalog = tmp_path / "capabilities.yaml"
     _write_catalog(catalog, "read-only")
+    plan = run_capability("probe", execute=False, path=catalog)
     monkeypatch.setattr(
         capabilities.subprocess,
         "run",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("launch failed")),
     )
-    result = run_capability("probe", execute=True, path=catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        path=catalog,
+        plan_fingerprint=plan["plan_fingerprint"],
+    )
     assert result["status"] == "failed"
     assert result["execution_started"] is False
     assert "timed_out" not in result
@@ -127,12 +187,18 @@ def test_oserror_before_process_start_is_not_reported_as_executed(tmp_path: Path
 def test_timeout_preserves_started_but_unfinished_execution_state(tmp_path: Path, monkeypatch):
     catalog = tmp_path / "capabilities.yaml"
     _write_catalog(catalog, "read-only")
+    plan = run_capability("probe", execute=False, path=catalog)
     monkeypatch.setattr(
         capabilities.subprocess,
         "run",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired(["probe"], 1)),
     )
-    result = run_capability("probe", execute=True, path=catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        path=catalog,
+        plan_fingerprint=plan["plan_fingerprint"],
+    )
     assert result["status"] == "failed"
     assert result["execution_started"] is True
     assert result["timed_out"] is True
@@ -143,4 +209,5 @@ def test_forbidden_capability_never_executes(tmp_path: Path):
     _write_catalog(catalog, "forbidden")
     result = run_capability("probe", execute=True, path=catalog)
     assert result["status"] == "blocked"
+    assert result["execution_started"] is False
     assert "stdout" not in result
