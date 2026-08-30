@@ -1,6 +1,10 @@
 # Windows Dev Agent - noninteractive Windows environment discovery.
 # Availability values are tri-state: $true observed present/enabled, $false
 # observed absent/disabled, and $null when the probe could not establish state.
+#
+# This broad snapshot deliberately avoids launching external developer tools.
+# Focused version probing belongs to tool_discover, where it can be time-bounded
+# and requested only when the result can change a routing decision.
 
 $ErrorActionPreference = "Stop"
 
@@ -50,25 +54,6 @@ function Get-OptionalFeatureProbe {
     }
 }
 
-function Get-FirstOutputLine {
-    param(
-        [string]$Command,
-        [string[]]$Arguments
-    )
-    try {
-        $output = & $Command @Arguments 2>&1
-        if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) {
-            return $null
-        }
-        $first = $output | Select-Object -First 1
-        if ($null -eq $first) { return $null }
-        return ([string]$first).Trim()
-    }
-    catch {
-        return $null
-    }
-}
-
 # System and hardware state used by routing/resource decisions.
 try {
     $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
@@ -95,27 +80,28 @@ catch {
     }
 }
 
-# Virtualization and isolation prerequisites.
+# Virtualization and isolation prerequisites. Optional-feature identity is the
+# authority for enabled/disabled state; executable presence alone is not enough.
 $hyperv = Get-OptionalFeatureProbe "Microsoft-Hyper-V"
 $sandbox = Get-OptionalFeatureProbe "Containers-DisposableClientVM"
-$wslInstalled = $null
-$wslVersion = $null
-$wslDistros = @()
+$wslFeature = Get-OptionalFeatureProbe "Microsoft-Windows-Subsystem-Linux"
+$wslExePresent = $null
 try {
-    $wslInstalled = Test-Path -LiteralPath "$env:WINDIR\System32\wsl.exe"
-    if ($wslInstalled) {
-        $wslVersion = Get-FirstOutputLine "wsl.exe" @("--version")
-        try {
-            $wslDistros = @(& wsl.exe --list --quiet 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
-        }
-        catch {
-            Add-DiscoveryError "WSL distro inventory was not established: $($_.Exception.Message)"
-        }
-    }
+    $wslExePresent = Test-Path -LiteralPath "$env:WINDIR\System32\wsl.exe"
 }
 catch {
-    Add-DiscoveryError "WSL availability was not established: $($_.Exception.Message)"
-    $wslInstalled = $null
+    Add-DiscoveryError "WSL executable presence was not established: $($_.Exception.Message)"
+}
+
+$wslInstalled = $null
+if ($wslFeature.available -eq $true -and $wslExePresent -eq $true) {
+    $wslInstalled = $true
+}
+elseif ($wslFeature.available -eq $false -or $wslExePresent -eq $false) {
+    $wslInstalled = $false
+}
+elseif ($wslFeature.available -eq $true -and $wslExePresent -eq $false) {
+    Add-DiscoveryError "WSL feature is enabled but wsl.exe was not found"
 }
 
 $devDrives = @()
@@ -139,14 +125,15 @@ $discoveryResult.virtualization = @{
     hyper_v_available = $hyperv.available
     hyper_v_state = $hyperv.state
     wsl_installed = $wslInstalled
-    wsl_version = $wslVersion
-    wsl_distros = $wslDistros
+    wsl_version = $null
+    wsl_distros = @()
     windows_sandbox_available = $sandbox.available
     windows_sandbox_state = $sandbox.state
     dev_drives = $devDrives
 }
 
-# Package managers and development tools.
+# Package managers and development tools: presence only. Version details are
+# intentionally delegated to the focused tool_discover MCP tool.
 try {
     $discoveryResult.development_tools = @{
         winget_available = Test-CommandAvailable "winget"
@@ -167,37 +154,27 @@ catch {
     }
 }
 
-# Runtime availability/version state.
+# Runtime availability only. Avoid running arbitrary PATH-resolved binaries in
+# the broad discovery pass; focused version probes use Python-side timeouts.
 $runtimes = @{}
 foreach ($runtime in @(
-    @{ key = "python"; command = "python"; args = @("--version") },
-    @{ key = "node"; command = "node"; args = @("--version") },
-    @{ key = "rust"; command = "rustc"; args = @("--version") },
-    @{ key = "golang"; command = "go"; args = @("version") }
+    @{ key = "python"; command = "python" },
+    @{ key = "node"; command = "node" },
+    @{ key = "rust"; command = "rustc" },
+    @{ key = "golang"; command = "go" }
 )) {
     $available = Test-CommandAvailable $runtime.command
-    $version = if ($available -eq $true) { Get-FirstOutputLine $runtime.command $runtime.args } else { $null }
-    $runtimes[$runtime.key] = @{ available = $available; version = $version; versions = @() }
+    $runtimes[$runtime.key] = @{ available = $available; version = $null; versions = @() }
 }
-
 $dotnetAvailable = Test-CommandAvailable "dotnet"
-$dotnetVersions = @()
-if ($dotnetAvailable -eq $true) {
-    try {
-        $dotnetVersions = @(& dotnet --list-sdks 2>$null | ForEach-Object { ([string]$_).Split()[0] } | Where-Object { $_ })
-    }
-    catch {
-        Add-DiscoveryError ".NET SDK versions were not established: $($_.Exception.Message)"
-    }
-}
-$runtimes.dotnet = @{ available = $dotnetAvailable; version = $null; versions = $dotnetVersions }
+$runtimes.dotnet = @{ available = $dotnetAvailable; version = $null; versions = @() }
 $discoveryResult.runtimes = $runtimes
 
-# Git identity is intentionally not collected; routing only needs availability/version.
+# Git identity is intentionally not collected; routing only needs availability.
 $gitAvailable = Test-CommandAvailable "git"
 $discoveryResult.git = @{
     available = $gitAvailable
-    version = if ($gitAvailable -eq $true) { Get-FirstOutputLine "git" @("--version") } else { $null }
+    version = $null
 }
 
 # Editor presence only; no user/editor configuration is collected here.
