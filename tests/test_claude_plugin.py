@@ -53,6 +53,35 @@ def test_project_scoped_call_accepts_descendant(monkeypatch, tmp_path: Path):
     assert normalized["params"]["arguments"]["cwd"] == str(child.resolve())
 
 
+def test_relative_project_path_resolves_under_host_project(monkeypatch, tmp_path: Path):
+    project = tmp_path / "project"
+    child = project / "subproject"
+    child.mkdir(parents=True)
+    monkeypatch.setenv("WINDOWS_DEV_AGENT_PROJECT_DIR", str(project))
+
+    normalized, error = claude_server._bind_project_scope(
+        _call("workflow_plan", {"task": "run tests", "cwd": "subproject"})
+    )
+
+    assert error is None
+    assert normalized["params"]["arguments"]["cwd"] == str(child.resolve())
+
+
+def test_relative_project_escape_is_rejected(monkeypatch, tmp_path: Path):
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    outside.mkdir()
+    monkeypatch.setenv("WINDOWS_DEV_AGENT_PROJECT_DIR", str(project))
+
+    normalized, error = claude_server._bind_project_scope(
+        _call("workflow_plan", {"task": "run tests", "cwd": "../outside"})
+    )
+
+    assert normalized is None
+    assert "active Claude project" in error
+
+
 def test_project_scoped_call_rejects_directory_outside_host_project(monkeypatch, tmp_path: Path):
     project = tmp_path / "project"
     outside = tmp_path / "outside"
