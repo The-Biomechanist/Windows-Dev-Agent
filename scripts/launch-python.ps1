@@ -27,6 +27,16 @@ function Add-PythonCandidate {
     }
 }
 
+# A host may supply one already-resolved interpreter identity. Relative values are
+# rejected so this cannot reintroduce current-directory or PATH shadowing.
+if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_DEV_AGENT_PYTHON)) {
+    if (-not [IO.Path]::IsPathFullyQualified($env:WINDOWS_DEV_AGENT_PYTHON)) {
+        [Console]::Error.WriteLine('WINDOWS_DEV_AGENT_PYTHON must be an absolute python.exe path.')
+        exit 70
+    }
+    Add-PythonCandidate $env:WINDOWS_DEV_AGENT_PYTHON
+}
+
 # Prefer installation authorities that do not search the current project or PATH.
 $RegistryRoots = @(
     'Registry::HKEY_CURRENT_USER\Software\Python\PythonCore',
@@ -80,7 +90,7 @@ foreach ($Candidate in $Candidates) {
 
 $Selected = $Usable | Sort-Object Version -Descending | Select-Object -First 1
 if (-not $Selected) {
-    [Console]::Error.WriteLine('Windows Dev Agent requires a host Python 3.11 or newer. No supported interpreter was found in registered or standard Windows installation locations.')
+    [Console]::Error.WriteLine('Windows Dev Agent requires a host Python 3.11 or newer. No supported interpreter was found in the explicit host override, registered Python installations, or standard Windows installation locations.')
     exit 70
 }
 
