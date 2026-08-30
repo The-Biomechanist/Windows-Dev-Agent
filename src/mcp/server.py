@@ -270,7 +270,7 @@ def _guard_reviewed_plan(plan: dict[str, Any], supplied_fingerprint: Any) -> Opt
             **plan,
             "status": "stale_plan",
             "error": "Execution route or executable state changed; obtain and review a fresh plan",
-            "expected_plan_fingerprint": supplied_fingerprint,
+            "submitted_plan_fingerprint": supplied_fingerprint,
             "execution_started": False,
         }
     return None
