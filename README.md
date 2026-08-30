@@ -1,62 +1,53 @@
 # Windows Dev Agent
 
-A Windows-native developer-orchestration plugin for **Claude Code and Codex**, built around one shared runtime and one shared skill set.
+Windows-native developer orchestration for **Claude Code and Codex**, built around one shared runtime and six shared procedural skills.
 
-Windows Dev Agent inspects the real Windows host, routes development workflows, resolves and installs system packages, selects appropriate isolation, and helps consolidate fragmented agent/tool setups. The control plane stays Windows-native where Windows owns the problem: PowerShell, WinGet, WMI/CIM, .NET/MSBuild, and Windows management surfaces come first. WSL, Dev Containers, and Windows Sandbox are selected only when their actual boundary fits the task.
+Version **0.4.0** tightens the package around observable state and host-owned authority: environment discovery preserves unknown probe state, executing MCP calls use one real host permission boundary, Windows Sandbox stages the selected workload into the isolated VM, audit summaries keep unknown outcomes explicit, and user-level inventory is separated from project-local reads.
 
-Release **0.3.0** adds a Codex/ChatGPT desktop adapter without forking the implementation.
-
-## One core, two host adapters
+## Architecture
 
 ```text
-shared Windows Dev Agent core
-  skills/                       host-neutral procedures
-  capabilities.yaml             executable capability catalog
-  src/mcp/server.py             Windows behavior + 10 MCP tools
+shared core
+  skills/
+  capabilities.yaml
+  src/mcp/server.py
   src/capabilities.py
   src/discovery/
   src/models/environment.py
+  src/observability/
+  src/safety/gate.py
         │
         ├── Claude Code adapter
         │     .claude-plugin/plugin.json
         │     .mcp.json
         │     src/claude_server.py
-        │     agents/
-        │     commands/
-        │     hooks/hooks.json
+        │     agents/  commands/  hooks/hooks.json
         │
         └── Codex adapter
               .codex-plugin/plugin.json
               .mcp.codex.json
-              .agents/plugins/marketplace.json
               src/codex_server.py
               hooks/codex-hooks.json
               src/safety/codex_*.py
               src/observability/codex_*.py
 ```
 
-Host adapters own only host-specific packaging, path binding, permission integration, and hook output contracts. Windows behavior, capability semantics, and reusable procedures stay shared.
+Host adapters own only packaging, path binding, permission integration, and host hook contracts. Windows behavior and reusable procedures stay shared.
 
 ## Shared skills
 
 | Skill | Purpose |
 | --- | --- |
-| `env-inspect` | Inspect Windows host, runtime, toolchain, package-manager, and isolation state. |
-| `workflow-plan` | Build a bounded Windows-aware execution plan when planning can change the route. |
-| `package-install` | Resolve exact Windows package identity, plan installation, execute under host approval, and verify fresh state. |
-| `sandbox-run` | Route execution through WSL, a project Dev Container, or Windows Sandbox from the required isolation property. |
-| `win-setup` | Repair or bootstrap missing/broken Windows development prerequisites without rewriting unrelated machine state. |
-| `ecosystem-defrag` | Inventory agent/developer-tool overlap and plan or execute a reversible consolidation. |
+| `env-inspect` | Inspect Windows host, runtime, toolchain, package-manager, and isolation state without collapsing unknown probes into absence. |
+| `workflow-plan` | Build a bounded Windows-aware plan when dependencies or uncertainty can change the route. |
+| `package-install` | Resolve exact package identity, review the concrete mutation, execute under host permission, and verify fresh state. |
+| `sandbox-run` | Select WSL, a project Dev Container, or Windows Sandbox from the required execution property. |
+| `win-setup` | Repair missing or broken Windows development prerequisites with the smallest native change. |
+| `ecosystem-defrag` | Inventory concrete agent/tool overlap and plan or execute a reversible consolidation. |
 
-Claude slash commands are thin adapters to namespaced shared skills rather than separate workflow copies:
+Claude's `/windows-dev-agent:env`, `/windows-dev-agent:plan`, and `/windows-dev-agent:defrag` commands are thin adapters to those canonical skills. Codex consumes the same skills directly.
 
-- `/windows-dev-agent:env` → `windows-dev-agent:env-inspect`
-- `/windows-dev-agent:plan <task>` → `windows-dev-agent:workflow-plan`
-- `/windows-dev-agent:defrag` → `windows-dev-agent:ecosystem-defrag`
-
-Codex consumes the shared skills directly.
-
-## Install / run
+## Install surfaces
 
 ### Claude Code
 
@@ -66,194 +57,156 @@ From a checkout:
 claude --plugin-dir .
 ```
 
-The Claude adapter uses `.claude-plugin/plugin.json`, `.mcp.json`, the Windows orchestrator agent, slash commands, and Claude-specific hooks.
+`.mcp.json` keeps three identities separate:
+
+- `${CLAUDE_PLUGIN_ROOT}` — immutable plugin code/config;
+- `${CLAUDE_PLUGIN_DATA}` — persistent cache/audit data;
+- `${CLAUDE_PROJECT_DIR}` — active project boundary.
 
 ### Codex / ChatGPT desktop
 
-This repository carries a Codex plugin manifest at `.codex-plugin/plugin.json` and a repo marketplace at `.agents/plugins/marketplace.json`. Add the repository as a marketplace source:
+The repository carries `.codex-plugin/plugin.json` plus `.agents/plugins/marketplace.json`. The published marketplace entry for a release is pinned to an immutable Git commit rather than treating a moving `main` branch as the identity of a fixed version.
 
-```text
-codex plugin marketplace add The-Biomechanist/Windows-Dev-Agent
-```
+Codex installs plugin code into its cache, so project-scoped MCP tools require the current project directory explicitly. Runtime cache/audit state converges on `${CODEX_HOME:-~/.codex}/plugins/data/windows-dev-agent` rather than the installed plugin tree.
 
-Then restart the ChatGPT desktop app, choose the **Windows Dev Agent** marketplace in the Plugins Directory, and install `windows-dev-agent` from that source.
+Bundled Codex hooks are an **optional trusted layer**. Codex does not automatically trust newly installed/changed plugin hooks; until the user reviews and trusts them, native Codex MCP/shell approval policy remains the operative boundary. Mutation-capable WDA MCP tools remain `prompt`-gated regardless.
 
-The marketplace uses a Git-backed root plugin source rather than a local `./` path, so the canonical repository remains the single plugin tree.
+## MCP surface
 
-## Runtime requirements
-
-- Windows 10 or Windows 11 for full native behavior;
-- PowerShell 5.1+;
-- Python 3.9+;
-- a current Claude Code release for the Claude adapter;
-- a current Codex / ChatGPT desktop plugin runtime for the Codex adapter.
-
-The plugin runtime uses only Python's standard library. Development tests use pytest.
-
-## Shared MCP tools
-
-Both host adapters expose the same 10 runtime tools:
+Both adapters expose the same ten tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `env_inspect` | Native Windows environment snapshot with explicit `force_refresh`. |
-| `tool_discover` | Focused runtime/editor/package-manager/VCS discovery. |
-| `capability_run` | Plan or execute a registered argv-based capability with `shell=False`. |
+| `env_inspect` | Native Windows environment snapshot with time-bound cache and `force_refresh`. |
+| `tool_discover` | Focused executable/version discovery. |
+| `capability_run` | Plan or execute one registered argv-based capability. |
 | `workflow_plan` | Deterministic capability-aware execution scaffold. |
-| `package_search` | Search an installed Windows package manager to resolve package identity before mutation. |
-| `package_install` | Plan or execute an exact WinGet, Chocolatey, or Scoop install. |
-| `sandbox_run` | Route through WSL, a configured project Dev Container, or Windows Sandbox. |
-| `ecosystem_scan` | Read-only inventory for agent/tool consolidation. |
-| `logs_query` | Query minimal persistent Windows Dev Agent audit metadata. |
-| `mcp_audit` | Inspect supported MCP configuration surfaces without exposing environment values. |
+| `package_search` | Resolve package identity before mutation. |
+| `package_install` | Plan or execute one exact WinGet/Chocolatey/Scoop install. |
+| `sandbox_run` | Route and optionally launch WSL, Dev Container, or Windows Sandbox execution. |
+| `ecosystem_scan` | Project-local agent/tool inventory by default; optional broader host inventory. |
+| `logs_query` | Query bounded persistent WDA audit metadata. |
+| `mcp_audit` | Inspect project MCP configuration by default; broader reads are explicit. |
 
-The Codex MCP server key is internally `windows_dev_agent` so the current Codex runtime can expose a callable namespace reliably; this does not change the plugin/product name `windows-dev-agent`.
+## Authority model
 
-## Project and state binding
+Windows Dev Agent does **not** carry a model-controlled `user_approved` token.
 
-The two hosts provide different installation/runtime geometry, so their adapters bind state differently instead of pretending one path contract is universal.
+The sequence is deliberately simple:
 
-### Claude
+```text
+model constructs exact tool call
+→ active host applies its permission policy to that call
+→ if permitted, the same call reaches the MCP runtime
+```
 
-`.mcp.json` separates:
-
-- `${CLAUDE_PLUGIN_ROOT}` — plugin code/config and MCP working directory;
-- `${CLAUDE_PLUGIN_DATA}` — persistent discovery cache and audit metadata;
-- `${CLAUDE_PROJECT_DIR}` — the active project and default project-scoped execution surface.
-
-`src/claude_server.py` is a thin package/version adapter over the shared server; it does not duplicate Windows behavior.
-
-### Codex
-
-Codex installs plugins into its plugin cache, so that cache must **not** become the user's project by accident.
-
-- `.mcp.codex.json` starts the shared runtime through `src.codex_server` with plugin-root `cwd: "."`.
-- Codex legacy plugin hooks and MCP normalization do not expose one common plugin-data variable to both processes, so both adapters deliberately converge on the deterministic persistent root `${CODEX_HOME:-~/.codex}/plugins/data/windows-dev-agent`.
-- Project-scoped tools require the current Codex session/project directory explicitly:
-  - `capability_run.cwd`
-  - `workflow_plan.cwd`
-  - `sandbox_run.workspace_folder`
-  - `ecosystem_scan.cwd`
-  - `mcp_audit.cwd`
-
-The adapter rejects those calls when project identity is missing rather than operating on its installed cache. Runtime bindings are scoped to a delegated Codex request and restored afterward, so loading both host adapters in one process does not make import order decide the active cache/project identity.
-
-## Permission model
-
-Windows Dev Agent never treats a model-supplied `user_approved: true` value as authority. That field is only server-side acknowledgement after the active host has actually granted permission.
+Plan-only calls use `execute: false`. Mutation calls use `execute: true`. The shared runtime independently blocks capabilities classified `forbidden`; it does not pretend to prove that the host prompt occurred.
 
 ### Claude Code
 
-The Claude `PreToolUse` hook is tightening-only over Claude's native permission system:
+The Claude `PreToolUse` hook is tightening-only:
 
-| Effective class | Claude adapter |
-| --- | --- |
-| `read-only` | no plugin decision; native permission flow remains authoritative |
-| `reversible` | no plugin decision; native permission flow remains authoritative |
-| `approval-required` | force `ask` |
-| `checkpoint` | force `ask` |
-| `forbidden` | `deny` |
+- read-only / reversible → no WDA decision; Claude's normal policy remains authoritative;
+- approval-required / checkpoint → `ask`;
+- forbidden → `deny`;
+- it never returns `allow`.
 
-The hook covers Bash, Claude's native PowerShell tool, and Windows Dev Agent mutation-capable MCP calls. It never returns `allow`.
+Project-local ecosystem/MCP inspection is a bounded read. User-level ecosystem inventory, user MCP config, or an arbitrary extra MCP config path requires approval.
 
 ### Codex
 
-Codex has a different hook contract, so the adapter does **not** emulate Claude's `ask` decision.
+Codex uses native MCP approval modes. Always-bounded read tools can be `approve`; mutation-capable and potentially broader-read tools remain `prompt`.
 
-- `.mcp.codex.json` sets native MCP tool approval policy:
-  - read-only orchestration/discovery tools → `approve`;
-  - `capability_run`, `package_install`, `sandbox_run` → `prompt`.
-- `PreToolUse` can deny a known-forbidden effective action but otherwise emits no permission decision.
-- `PermissionRequest` runs only after Codex has decided approval is needed. For the three plan-first tools it auto-allows only `execute: false`; an `execute: true` request receives no plugin decision and continues to Codex's real human approval prompt.
-- Shell execution remains subject to Codex's native shell/sandbox permission policy.
+When Codex plugin hooks are trusted, `PermissionRequest` removes needless prompts only when the concrete request is still bounded:
 
-This keeps the invariant simple: **Windows Dev Agent decides what operation fits; the host decides whether execution is permitted.**
+- `execute: false` plan-first calls may be allowed;
+- project-only `ecosystem_scan` / `mcp_audit` may be allowed;
+- `execute: true`, `include_host: true`, or arbitrary `config_path` receives no WDA allow decision and continues to normal Codex approval.
 
-## Effective-action safety
+`PreToolUse` may deny a known-forbidden action but never emulates Claude's `ask` result.
 
-The shared classifier and capability runtime avoid granting authority from a friendly-looking launcher name alone:
+## Environment evidence
 
-- compound, redirected, substituted, or dynamically invoked shell commands cannot inherit a read-only prefix classification;
-- caller-supplied capability `extra_args` cannot inherit a weaker base capability classification;
-- project build/test/lint launchers are not assumed harmless merely because their executable name is familiar;
-- forbidden capabilities remain blocked by the MCP runtime itself;
-- child processes receive `DEVNULL` stdin instead of inheriting the MCP JSON-RPC transport.
+Availability fields are tri-state:
 
-The Codex adapter normalizes its underscore MCP namespace back to the shared classifier without changing the shared Claude contract.
+- `true` — observed present/enabled;
+- `false` — observed absent/disabled;
+- `null` — the probe did not establish the fact.
 
-## Capability routing
+The shipped PowerShell producer uses live-image optional-feature queries (`Get-WindowsOptionalFeature -Online`). Probe failures are recorded in `snapshot.errors` and make the snapshot degraded rather than silently becoming `false`.
 
-`capabilities.yaml` is intentionally small and executable. It uses the JSON-compatible subset of YAML so the runtime can parse it with Python's standard `json` module.
+The cache stores the same canonical representation returned to consumers; it is not a second serialization format. Cache TTL is five minutes, and package-install execution invalidates the cached snapshot even on a failed installer because partial mutation is possible.
 
-The current catalog covers:
+Discovery intentionally does **not** persist username/domain, Git user identity, or full PowerShell module inventory. Those values are not required by the current routing consumers.
 
-- Git working-tree inspection;
-- Python and JavaScript/TypeScript linting;
-- Python and .NET tests;
-- .NET builds;
-- GitHub PR creation as an approval-required publication action.
+## Package setup
 
-Configured commands are argv arrays. Runtime execution uses `shell=False`.
+`package_search` is the read-only package-identity producer. A package mutation should use an exact ID from the user/authoritative project state or resolve one through search before `package_install`.
 
-## Package identity and freshness
-
-A package mutation should not begin from a guessed ID. Use an exact ID supplied by the user or authoritative project/config state, or call `package_search` and resolve the matching candidate before `package_install`.
-
-WinGet search is noninteractive and does not auto-accept source agreements. If a source agreement prevents discovery, that unresolved prerequisite is surfaced rather than silently accepted by a read-only search.
-
-Any executed package-install attempt invalidates the cached environment snapshot because an installer can partially mutate host state even when it exits nonzero. Downstream verification should use the narrowest fresh probe or `env_inspect(force_refresh=true)` when a full refreshed snapshot is actually required.
+`package_install(execute:false)` returns the concrete argv for review. `execute:true` requests that exact mutation under the active host permission policy. Installer exit is not treated as proof that the requested task now works; verify executable/version/task state afterward.
 
 ## Isolation
 
-`environment: auto` does **not** mean "first backend installed." It requires `isolation_requirement` and routes by the property the task needs:
+`environment:auto` requires an `isolation_requirement`:
 
 - `linux_compatibility` → WSL;
-- `project_reproducibility` → a configured project Dev Container;
+- `project_reproducibility` → configured project Dev Container;
 - `untrusted_windows` → Windows Sandbox.
 
-WSL is an interoperable Linux environment and is not treated as hostile-Windows containment. Windows Sandbox plans do not materialize a bundle. On approved execution, the runtime creates a temporary `.wsb` bundle with networking and clipboard disabled, maps only that generated bundle read-only, and launches the sandbox interactively. Launch is not reported as proof that the command inside succeeded.
+WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by default. Dev Container execution uses the project configuration and `sh -lc`.
 
-Hyper-V is not claimed as an implemented `sandbox_run` backend.
+### Windows Sandbox payloads
 
-## Ecosystem inventory
+A hostile Windows workload is not isolated merely because a Sandbox window launches. For `untrusted_windows`, supply workspace-relative `payload_paths` identifying the files/directories the inner command actually needs. The runtime:
 
-The shared scanner covers project/user surfaces that are host-independent or already useful to Claude. The Codex adapter augments that result with Codex plugin/config presence and project `.agents/` state rather than putting Codex-specific filesystem rules into the shared Windows scanner.
+1. rejects absolute paths, `..` escapes, missing paths, symbolic-link escapes, and oversized trees;
+2. stages the selected payload into a temporary bundle;
+3. maps only that generated bundle into Windows Sandbox, read-only;
+4. disables Sandbox networking and clipboard;
+5. runs the inner command from `C:\WDAShare\payload`.
 
-`ecosystem-defrag` distinguishes specialists from actual orchestration overlap, preserves unknowns, requires a real restore path before cleanup, and allows a read-only "no change needed" outcome.
+Planning does not materialize the bundle. An executing Sandbox call returns `launched` plus `cleanup_path`; that establishes launch only. Inner command success remains unknown until observed from inside the Sandbox.
 
-## Audit trail
+## Ecosystem and MCP reads
 
-The plugin persists only metadata its audit surfaces consume. It does **not** retain arbitrary command bodies, tool inputs, stdout/stderr, or unrelated tool responses.
+`ecosystem_scan` starts project-local. Set `include_host:true` only when user-level extensions/plugins/MCP state can change the decision. `include_packages:true` is legal only with host inventory enabled.
 
-Claude and Codex use separate hook adapters because their hook event/decision contracts differ, but both write the same minimal event shape where possible:
+`mcp_audit` likewise starts from the project boundary. User-level MCP configuration and arbitrary `config_path` reads are explicit broader requests and remain on the host approval surface.
 
-- session/tool identity;
-- safety classification / permission denial metadata;
-- completion metadata without raw payloads.
+Returned MCP summaries omit environment values and do not expose secrets from the inspected config.
 
-Session summaries are bound to the current session. Persistent-history queries are explicitly labeled as history.
+## Audit state and retention
+
+WDA persists only metadata its audit consumers need; raw commands, MCP arguments, stdout/stderr, and arbitrary tool responses are not retained.
+
+For execution-capable calls, the audit representation distinguishes:
+
+- `succeeded` — result establishes successful execution;
+- `failed` — result establishes failed execution;
+- `unknown` — execution/launch occurred but the available observation does not establish outcome;
+- `not_executed` — plan/block/unavailable/invalid input prevented execution;
+- `not_applicable` — the call has no execution phase.
+
+Codex PostToolUse may inspect the WDA MCP result **in memory** to derive that small status, then discards the raw response. A Windows Sandbox launch therefore remains `unknown`, never “zero failures.”
+
+`agent.log` is bounded to 2 MiB and one rotated predecessor (`agent.log.1`). Environment cache and audit state live outside the immutable plugin code tree.
+
+## Capability catalog
+
+`capabilities.yaml` contains only fields with live consumers: description, safety, tags, and argv tools. Configured commands execute with `shell=False` and `DEVNULL` stdin. Caller-supplied `extra_args` upgrade effective authority to approval-required rather than inheriting the base capability class.
+
+The current catalog covers Git inspection, Python/JavaScript linting, Python/.NET tests, .NET build, and GitHub PR creation.
 
 ## Verification
 
 GitHub Actions runs on `windows-latest` and checks:
 
-1. runtime compilation;
-2. the pytest regression suite;
-3. Claude host-adapter MCP initialization, package version, and exact 10-tool surface;
-4. Codex host-adapter MCP initialization, package version, and the same exact 10-tool surface.
+1. Python runtime compilation;
+2. the contract-focused pytest suite;
+3. the **actual shipped PowerShell discovery producer** on the Windows runner;
+4. exact MCP initialization/version/tool surfaces for Claude and Codex.
 
-The tests additionally discriminate:
-
-- Claude vs Codex manifest/component wiring;
-- root Git marketplace distribution;
-- Codex-safe MCP namespace selection;
-- per-tool Codex approval policy and plan-only `PermissionRequest` behavior;
-- required Codex project identity and cross-host binding restoration;
-- deny-only Codex `PreToolUse` semantics;
-- Codex-valid Stop-hook JSON;
-- deterministic Codex audit/cache path shared by MCP and hooks;
-- shared skill frontmatter and namespaced Claude command-to-skill routing;
-- audit provenance and MCP transport isolation.
+The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness, Sandbox payload staging and path containment, WSL project binding, audit outcome uncertainty/retention, host adapter wiring, and MCP transport isolation.
 
 For local development:
 
@@ -263,4 +216,14 @@ python -m compileall -q src
 python -m pytest tests -q
 ```
 
-A green run supports only the behavior those checks execute. It does not prove a human accepted an interactive host permission dialog or that a command launched inside Windows Sandbox completed successfully.
+A green run supports only the contracts those checks actually exercise. It does not establish that a human accepted a real Claude/Codex permission dialog, nor that a command launched inside an interactive Windows Sandbox completed successfully on an end-user desktop.
+
+## Requirements
+
+- Windows 10/11 for full native behavior;
+- Windows PowerShell 5.1+;
+- Python 3.9+;
+- current Claude Code for the Claude adapter;
+- current Codex / ChatGPT desktop plugin runtime for the Codex adapter.
+
+Runtime dependencies are Python standard-library only. Development tests use pytest.
