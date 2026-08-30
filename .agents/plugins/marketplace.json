@@ -1,0 +1,21 @@
+{
+  "name": "windows-dev-agent",
+  "interface": {
+    "displayName": "Windows Dev Agent"
+  },
+  "plugins": [
+    {
+      "name": "windows-dev-agent",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/The-Biomechanist/Windows-Dev-Agent.git",
+        "sha": "b0349a3f02358d465e8fe1de40c5205ce2f59950"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
