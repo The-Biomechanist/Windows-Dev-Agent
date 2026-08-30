@@ -20,6 +20,18 @@ jobs:
           python-version: "3.14"
           cache: pip
           cache-dependency-path: requirements-dev.txt
+      - name: Correct transform call guard
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          path = Path('.github/apply_executable_file_identity.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'if "_reviewed_executable" in text:'
+          new = 'if "_reviewed_executable(" in text:'
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          '@ | python -
       - name: Apply exact source transforms
         run: python .github/apply_executable_file_identity.py
       - name: Remove temporary staging machinery
