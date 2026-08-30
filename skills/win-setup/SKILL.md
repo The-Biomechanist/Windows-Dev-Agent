@@ -1,37 +1,23 @@
 ---
-description: Bootstrap or repair a Windows development environment. Use when setting up a new machine, onboarding to a project, or fixing a broken environment. Triggers on phrases like "set up my environment", "bootstrap", "my Python isn't working", or "I need to install X".
+description: Bootstrap or repair a Windows development environment when runtimes, tools, package managers, or native configuration are missing or broken.
 ---
 
-When bootstrapping or repairing a Windows dev environment:
+# Windows Setup
 
-1. **Inspect first** — run `env_inspect` to get current state before touching anything
-2. **Identify gaps** — compare discovered state against what the project or task needs
-3. **Propose a plan** — list everything that needs installing or fixing, with WinGet commands
-4. **Safety gate** — all installs are `approval-required`. Show the full list, wait for confirmation.
-5. **Execute in order**:
-   - WinGet sources first (`winget source update`)
-   - Runtimes (Python, Node, Rust, Go, .NET)
-   - Dev tools (Git, VS Code, Docker if needed)
-   - Project dependencies (via language-native tool after runtime is confirmed)
-6. **Verify** — re-run `env_inspect` after install, confirm versions match expectations
-7. **Report** — summarize what was installed, what was already present, anything that failed
+## Procedure
 
-## WinGet patterns
+1. **Inspect current state first.** Use `env_inspect` and project requirements. Do not reinstall tools merely because the user mentioned them.
+2. **Locate the earliest missing or broken prerequisite.** Distinguish runtime absence, PATH/session propagation, version mismatch, package-manager failure, project dependency failure, and Windows feature state.
+3. **Choose the native repair.** Prefer the smallest Windows-owned change that repairs that prerequisite. Do not turn a local project problem into a machine-wide setup rewrite.
+4. **For system package installation, use `package_install`.** Call it with `execute: false` first to expose the exact source and argv. Executing calls are approval-required and are independently forced through the Claude Code host prompt.
+5. **For Windows optional features**, use an explicitly approved PowerShell action only when the feature is actually required. WSL, Windows Sandbox, and Hyper-V are OS features, not ordinary package installs.
+6. **For project dependencies**, switch to the project's own package manager only after the required runtime/toolchain is established. Preserve lockfiles and project conventions.
+7. **Verify the repaired joint.** Re-run the narrow version, availability, build, or project check that can establish the requested state. Use `env_inspect` again only when a full environment refresh is relevant.
 
-```powershell
-# Update sources
-winget source update
+## Rules
 
-# Install a runtime
-winget install --id Python.Python.3.12 --exact --silent
-
-# Install a tool
-winget install --id Git.Git --exact --silent
-winget install --id Microsoft.VisualStudioCode --exact --silent
-
-# Check what's installed
-winget list --source winget
-```
-
-Never use `--silent` for anything that requires a license agreement confirmation.
-Always verify the `--id` is exact before running.
+- Never use `--silent` to bypass license or installer interaction.
+- Resolve an exact package identity before installation; do not guess WinGet IDs.
+- Do not treat a successful installer exit as proof that the current shell sees the new PATH.
+- Do not mutate unrelated runtimes or package-manager state while repairing one dependency.
+- If elevation or restart is required, state that post-state explicitly rather than claiming completion early.
