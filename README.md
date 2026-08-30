@@ -157,13 +157,13 @@ WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by de
 
 A hostile Windows workload is not isolated merely because a Sandbox window launches. For `untrusted_windows`, supply workspace-relative `payload_paths` identifying the files/directories the inner command actually needs. The runtime:
 
-1. rejects absolute paths, `..` escapes, missing paths, symbolic-link escapes, and trees over 10,000 filesystem entries;
+1. rejects absolute paths, `..` escapes, missing paths, symbolic-link escapes, overlapping selections, payloads over 10,000 filesystem entries, and payloads over 1 GiB total file bytes;
 2. stages the selected payload into a temporary bundle;
 3. maps only that generated bundle into Windows Sandbox, read-only;
 4. disables Sandbox networking and clipboard;
 5. runs the inner command from `C:\WDAShare\payload`.
 
-Planning does not materialize the bundle. An executing Sandbox call returns `launched` plus `cleanup_path`; that establishes launch only. Inner command success remains unknown until observed from inside the Sandbox.
+Planning does not materialize the bundle. An executing Sandbox call returns `launched` plus `cleanup_path`; that establishes launch only. Inner command success remains unknown until observed from inside the Sandbox. If staging or process launch fails before the Sandbox starts, the partial temporary bundle is removed automatically.
 
 ## Ecosystem and MCP reads
 
@@ -171,7 +171,7 @@ Planning does not materialize the bundle. An executing Sandbox call returns `lau
 
 `mcp_audit` likewise starts from the project boundary. User-level MCP configuration and arbitrary `config_path` reads are explicit broader requests.
 
-Returned MCP summaries omit environment values and do not expose secrets from the inspected config. On Codex, all filesystem inventory reads remain on native approval because caller-supplied project identity cannot be independently authenticated by the plugin.
+Returned MCP summaries expose only structural metadata: server name, validity, transport kind, argument count, and whether command/URL/environment fields are present. Raw command strings, URLs, argument values, and environment values are not returned. JSON config reads are capped at 2 MiB per file. On Codex, all filesystem inventory reads remain on native approval because caller-supplied project identity cannot be independently authenticated by the plugin.
 
 ## Audit state and retention
 
@@ -205,7 +205,7 @@ GitHub Actions runs on `windows-latest` across Python **3.9** and **3.13** and c
 4. exact MCP initialization/version/tool surfaces for Claude and Codex;
 5. when the canonical release index is present, that its immutable SHA resolves to a Codex plugin manifest with the same published version.
 
-The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness, Sandbox payload staging and path containment, WSL project binding, audit outcome uncertainty/retention, host adapter wiring, and MCP transport isolation.
+The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness, Sandbox payload staging/path/resource containment, WSL project binding, audit outcome uncertainty/retention, MCP summary minimization, host adapter wiring, and MCP transport isolation.
 
 For local development:
 
