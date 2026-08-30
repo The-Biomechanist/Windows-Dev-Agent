@@ -28,6 +28,25 @@ def test_tools_list_exposes_exact_runtime_surface():
     ]
 
 
+def test_subprocesses_cannot_consume_mcp_stdin(monkeypatch):
+    observed = {}
+
+    class Result:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        observed["argv"] = argv
+        observed.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
+    result = server._run(["probe"])
+    assert result["succeeded"] is True
+    assert observed["stdin"] is server.subprocess.DEVNULL
+
+
 def test_workflow_plan_is_not_placeholder():
     result = run(server.handle_workflow_plan({"task": "run the Python tests"}))
     assert result["status"] == "planned"
@@ -71,9 +90,10 @@ def test_package_search_produces_read_only_candidate_evidence(monkeypatch):
         "Python 3.12",
         "--source",
         "winget",
-        "--accept-source-agreements",
+        "--disable-interactivity",
     ]
     assert "install" not in observed["argv"]
+    assert "--accept-source-agreements" not in observed["argv"]
 
 
 def test_package_install_defaults_to_plan_only():
