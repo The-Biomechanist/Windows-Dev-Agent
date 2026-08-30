@@ -42,7 +42,13 @@ The MCP runtime validates tool arguments again at execution time. Advertised JSO
 
 ### Executable identity matters
 
-WDA resolves external executables to an absolute identity before execution and carries that identity into the process launch. Captured subprocess execution refuses an unresolved/bare executable.
+WDA resolves external executables to absolute identities and captured subprocess execution refuses an unresolved/bare executable.
+
+For plan-first `capability_run`, `package_install`, and `sandbox_run`, the `execute:false` result exposes the absolute `executable` used to construct the reviewed plan. A later `execute:true` call must echo that value as `expected_executable`. WDA then establishes the current executable again and requires it to resolve to the same live absolute file before mutation, Sandbox staging, or process launch. A missing identity is invalid input; a changed identity returns `stale_plan` with `execution_started:false` and requires a fresh plan.
+
+`expected_executable` is an identity/staleness precondition only. It is not evidence that a person approved anything and does not replace Claude/Codex permission authority.
+
+After the identity check, the already-established current absolute path is carried into the process launch; WDA does not perform a later PATH lookup for that execution.
 
 The plugin's Python bootstrap does not find Python from the active project or inherited PATH. It uses Windows installation authorities/standard host locations or an explicit absolute `WINDOWS_DEV_AGENT_PYTHON` override, requires Python 3.11+, and runs the interpreter in isolated mode.
 
@@ -52,11 +58,13 @@ Windows-owned control-plane executables used by the runtime—such as WSL, Windo
 
 Project-scoped reads are bounded to the host project and reject symbolic-link/NTFS-reparse traversal at the relevant read/staging boundary. Failure to establish reparse metadata is not treated as proof that a path is ordinary.
 
+Dev Container routing requires an actual project `.devcontainer/devcontainer.json` or root `.devcontainer.json`; an empty `.devcontainer/` directory is not configuration evidence, and linked/reparse configuration is rejected at the WDA read boundary.
+
 This does not claim that every arbitrary command an approved tool executes is unable to traverse links on its own. The containment guarantee applies to WDA-owned project reads and Windows Sandbox payload staging.
 
 ### ACT is not outcome
 
-Launching or requesting an external operation is not evidence that its intended effect occurred. WDA preserves separate states for planned, started, completed, failed, timed-out, and unresolved external execution where the available observation supports those distinctions.
+Launching or requesting an external operation is not evidence that its intended effect occurred. WDA preserves separate states for planned, stale/rejected, started, completed, failed, timed-out, and unresolved external execution where the available observation supports those distinctions. A `stale_plan` is a `not_executed` outcome, not a failed execution.
 
 Best-effort process-tree termination after timeout is not proof that every descendant or external side effect was undone.
 
@@ -70,10 +78,10 @@ WSL is a compatibility/interoperability route, not hostile-Windows containment. 
 
 ## Persistent data and privacy
 
-WDA persistent state is intentionally small:
+WDA persistent/control state is intentionally small:
 
-- a bounded environment cache;
-- a bounded audit log plus one rotated predecessor;
+- a bounded environment cache plus tiny mutation-generation/lock metadata;
+- a bounded audit log plus one rotated predecessor and a tiny interprocess lock file;
 - temporary WDA-owned Windows Sandbox bundles while needed for execution/cleanup.
 
 Audit records do not persist raw commands, MCP arguments, stdout/stderr, or arbitrary tool responses. `logs_query` does not return the physical data-directory path.
@@ -89,7 +97,8 @@ The following are not presently claimed as security guarantees:
 - rollback of arbitrary package installs or external mutations;
 - Hyper-V isolation (not an implemented backend);
 - successful completion of the inner Windows Sandbox command merely because the Sandbox process launched;
+- the `WindowsSandbox.exe` process handle being a universal Windows Sandbox session-lifetime oracle;
 - modern-MCP-protocol support beyond the legacy protocol surface currently exercised by the host adapters;
 - resistance to an operating-system vulnerability that defeats the underlying Windows security boundary.
 
-Please report cases where WDA's implementation violates the narrower guarantees it does make: project/data authority, exact executable identity, request validation, outcome honesty, isolation routing, bounded retention, or immutable release identity.
+Please report cases where WDA's implementation violates the narrower guarantees it does make: project/data authority, reviewed-to-executed executable identity, request validation, outcome honesty, isolation routing, bounded retention, or immutable release identity.
