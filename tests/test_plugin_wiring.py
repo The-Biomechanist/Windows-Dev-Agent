@@ -8,6 +8,16 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_manifest_uses_current_schema_surface():
+    manifest = json.loads(
+        (ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
+    assert manifest["$schema"] == "https://json.schemastore.org/claude-code-plugin-manifest.json"
+    assert manifest["name"] == "windows-dev-agent"
+    assert manifest["displayName"] == "Windows Dev Agent"
+    assert "minClaudeCodeVersion" not in manifest
+
+
 def test_mcp_server_uses_plugin_root_as_cwd():
     config = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
     server = config["mcpServers"]["windows-dev-agent"]
