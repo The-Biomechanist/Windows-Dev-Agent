@@ -38,9 +38,12 @@ def test_reversible_project_code_is_not_autoallowed():
     assert _decision("PowerShell", {"command": "dotnet build"}) is None
 
 
-def test_destructive_disk_command_is_forbidden():
+def test_destructive_disk_and_system32_commands_are_forbidden():
     assert gate.classify_shell("format C:") == "forbidden"
     assert _decision("PowerShell", {"command": "format C:"}) == "deny"
+    system32 = r"Remove-Item C:\Windows\System32\drivers\example.sys"
+    assert gate.classify_shell(system32) == "forbidden"
+    assert _decision("PowerShell", {"command": system32}) == "deny"
 
 
 def test_package_plan_defers_but_execute_asks_without_fake_approval_bit(monkeypatch):
