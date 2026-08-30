@@ -425,8 +425,11 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
     if not shutil.which(argv[0]):
         return {**plan, "status": "unavailable", "error": f"{argv[0]} is not installed"}
 
+    # An installer can partially mutate host state even when it exits nonzero.
+    # Once execution begins, the pre-attempt environment snapshot is no longer
+    # authoritative for downstream decisions.
     result = _run(argv, timeout=600)
-    cache_invalidated = _invalidate_environment_cache() if result.get("succeeded") else False
+    cache_invalidated = _invalidate_environment_cache()
     return {
         **plan,
         **result,
