@@ -97,7 +97,7 @@ catch {
 
 # Virtualization and isolation prerequisites.
 $hyperv = Get-OptionalFeatureProbe "Microsoft-Hyper-V"
-$sandbox = Get-OptionalFeatureProbe "Containers-DisposableVM"
+$sandbox = Get-OptionalFeatureProbe "Containers-DisposableClientVM"
 $wslInstalled = $null
 $wslVersion = $null
 $wslDistros = @()
@@ -146,8 +146,7 @@ $discoveryResult.virtualization = @{
     dev_drives = $devDrives
 }
 
-# Package managers and developer tools. Get-Command/Test-Path produce a real
-# present/absent observation; a section-level failure leaves values unknown.
+# Package managers and development tools.
 try {
     $discoveryResult.development_tools = @{
         winget_available = Test-CommandAvailable "winget"
