@@ -1,9 +1,9 @@
 """Host-neutral runtime path resolution for Windows Dev Agent.
 
-Claude injects explicit plugin data/project paths into the MCP server. Codex
-uses its plugin data directory when the host exposes it and otherwise falls
-back to a stable user-writable location. Project identity is never inferred
-from an installed-plugin cache path when an explicit project path is available.
+Claude injects explicit plugin data/project paths. Codex legacy plugin hooks and
+MCP normalization do not expose the same data variable to both processes, so
+the Codex adapter deliberately converges on one deterministic persistent root
+under CODEX_HOME instead of assuming host variables are shared.
 """
 
 from __future__ import annotations
@@ -20,26 +20,24 @@ def runtime_host(explicit: Optional[str] = None) -> str:
     return value.strip().lower() or "claude"
 
 
+def codex_home() -> Path:
+    configured = os.environ.get("CODEX_HOME")
+    return Path(configured).expanduser() if configured else Path.home() / ".codex"
+
+
+def resolve_codex_data_dir() -> Path:
+    configured = os.environ.get("WINDOWS_DEV_AGENT_DATA_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return codex_home() / "plugins" / "data" / "windows-dev-agent"
+
+
 def resolve_data_dir(*, host: Optional[str] = None) -> Path:
     configured = os.environ.get("WINDOWS_DEV_AGENT_DATA_DIR")
     if configured:
         return Path(configured).expanduser()
-
     if runtime_host(host) == "codex":
-        plugin_data = os.environ.get("PLUGIN_DATA") or os.environ.get("CLAUDE_PLUGIN_DATA")
-        if plugin_data:
-            return Path(plugin_data).expanduser()
-
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            return Path(local_app_data) / "WindowsDevAgent" / "Codex"
-        if os.name == "nt":
-            return Path.home() / "AppData" / "Local" / "WindowsDevAgent" / "Codex"
-        xdg_data = os.environ.get("XDG_DATA_HOME")
-        if xdg_data:
-            return Path(xdg_data).expanduser() / "windows-dev-agent" / "codex"
-        return Path.home() / ".local" / "share" / "windows-dev-agent" / "codex"
-
+        return resolve_codex_data_dir()
     return ROOT / ".cache"
 
 
