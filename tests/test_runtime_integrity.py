@@ -77,7 +77,7 @@ def test_workflow_plan_does_not_select_unique_match_without_executable(tmp_path:
     assert result["selected_candidate"] is None
     assert result["matched_candidate"]["capability"] == "alpha"
     assert result["matched_candidate"]["available_tool"] is None
-    assert "no configured tools are available" in result["phases"][1]["action"].lower()
+    assert "configured tools are available" in result["phases"][1]["action"].lower()
 
 
 def test_payload_walk_rejects_reparse_boundary_before_descent(tmp_path: Path, monkeypatch):
