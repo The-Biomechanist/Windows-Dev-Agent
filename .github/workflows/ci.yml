@@ -26,7 +26,9 @@ jobs:
         run: |
           @'
           import asyncio
-          from src.mcp.server import handle_request
+          from src import __version__
+          from src.claude_server import handle_request as claude_handle
+          from src.codex_server import handle_request as codex_handle
 
           expected = [
               "env_inspect",
@@ -40,10 +42,12 @@ jobs:
               "logs_query",
               "mcp_audit",
           ]
-          init = asyncio.run(handle_request({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}))
-          assert init["result"]["serverInfo"]["name"] == "windows-dev-agent"
-          tools = asyncio.run(handle_request({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
-          names = [tool["name"] for tool in tools["result"]["tools"]]
-          assert names == expected, names
-          print("MCP preflight OK:", ", ".join(names))
+
+          for host, handle in (("claude", claude_handle), ("codex", codex_handle)):
+              init = asyncio.run(handle({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}))
+              assert init["result"]["serverInfo"] == {"name": "windows-dev-agent", "version": __version__}
+              tools = asyncio.run(handle({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
+              names = [tool["name"] for tool in tools["result"]["tools"]]
+              assert names == expected, (host, names)
+              print(f"{host} MCP preflight OK:", ", ".join(names))
           '@ | python -

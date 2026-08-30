@@ -1,6 +1,6 @@
 name: windows-dev-agent
-version: 0.2.0
-description: Windows-native Claude Code orchestration plugin with PowerShell-first discovery, host-enforced approval gates, capability routing, package setup, and isolation.
+version: 0.3.0
+description: Claude Code package for the shared Windows Dev Agent runtime with PowerShell-first discovery, capability routing, package setup, isolation, and ecosystem cleanup.
 targets:
   - claude
 homepage: https://github.com/The-Biomechanist/Windows-Dev-Agent

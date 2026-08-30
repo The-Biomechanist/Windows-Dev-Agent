@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "windows-dev-agent",
   "displayName": "Windows Dev Agent",
-  "description": "Windows-native Claude Code orchestration with PowerShell-first discovery, host-enforced approval gates, capability routing, package setup, isolation, and /defrag ecosystem inventory.",
-  "version": "0.2.0",
+  "description": "Claude Code adapter for the shared Windows Dev Agent runtime: PowerShell-first discovery, host-enforced approval gates, capability routing, package setup, isolation, and ecosystem cleanup.",
+  "version": "0.3.0",
   "author": {
     "name": "The-Biomechanist",
     "url": "https://github.com/The-Biomechanist"

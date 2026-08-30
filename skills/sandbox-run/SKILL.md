@@ -1,4 +1,5 @@
 ---
+name: sandbox-run
 description: Route command execution through WSL, a project Dev Container, or Windows Sandbox when that boundary materially fits the task. Launching execution is always host approval-gated.
 ---
 
@@ -20,9 +21,9 @@ If the caller selects an explicit `environment`, the runtime respects that reque
 
 1. Establish the property the boundary must provide. If it is not clear whether the need is Linux compatibility, project reproducibility, or untrusted-Windows containment, do not silently substitute one for another.
 2. Inspect relevant backend availability with `env_inspect` when it is not already known.
-3. Call `sandbox_run` with `execute: false`, using either an explicit environment or `environment: auto` plus the resolved `isolation_requirement`. Inspect the selected route and launch plan. Planning must not launch the workload or materialize a Windows Sandbox bundle.
+3. Call `sandbox_run` with `execute: false`, using either an explicit environment or `environment: auto` plus the resolved `isolation_requirement`. In Codex, pass the current session/project directory as `workspace_folder`; do not use the installed plugin cache as a workspace. Planning must not launch the workload or materialize a Windows Sandbox bundle. Codex may auto-allow this plan-only request through its `PermissionRequest` adapter after the host asks; that does not authorize launch.
 4. If the selected route cannot satisfy the requirement, report the missing prerequisite or deliberately choose a different explicit boundary whose tradeoff is acceptable. Never fall back to the host merely because isolation is unavailable.
-5. To launch, call `sandbox_run` with `execute: true` and `user_approved: true`. The bundled `PreToolUse` hook still returns `permissionDecision: ask`; execution occurs only if the user accepts the host prompt.
+5. To launch, use the active host's permission boundary. Claude forces the executing call through its host prompt. Codex keeps `sandbox_run` in native MCP `prompt` mode; its plan-only permission adapter makes no decision for `execute: true`, so the real human prompt remains authoritative. After permission is actually granted, execute with `user_approved: true` as server-side acknowledgement.
 6. For WSL and Dev Container runs, evaluate the captured return code/stdout/stderr only for what they establish. For Windows Sandbox, report only that the interactive sandbox was launched; do not claim the command inside succeeded without an observation from that sandbox.
 7. Executed Windows Sandbox launches return the temporary config/cleanup path. Remove that temporary bundle only after the sandbox no longer needs it.
 

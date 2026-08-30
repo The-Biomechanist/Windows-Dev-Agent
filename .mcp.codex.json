@@ -1,0 +1,23 @@
+{
+  "windows_dev_agent": {
+    "command": "python",
+    "args": ["-m", "src.codex_server"],
+    "cwd": ".",
+    "env": {
+      "WINDOWS_DEV_AGENT_HOST": "codex"
+    },
+    "default_tools_approval_mode": "prompt",
+    "tools": {
+      "env_inspect": {"approval_mode": "approve"},
+      "tool_discover": {"approval_mode": "approve"},
+      "workflow_plan": {"approval_mode": "approve"},
+      "package_search": {"approval_mode": "approve"},
+      "ecosystem_scan": {"approval_mode": "approve"},
+      "logs_query": {"approval_mode": "approve"},
+      "mcp_audit": {"approval_mode": "approve"},
+      "capability_run": {"approval_mode": "prompt"},
+      "package_install": {"approval_mode": "prompt"},
+      "sandbox_run": {"approval_mode": "prompt"}
+    }
+  }
+}
