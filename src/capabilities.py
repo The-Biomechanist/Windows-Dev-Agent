@@ -3,7 +3,12 @@
 The catalog uses the JSON-compatible subset of YAML and the Python standard
 library. Commands are argv vectors and never execute through a host shell.
 Safety is computed for the effective request: appended caller arguments cannot
-inherit a weaker auto-allowable classification from the base capability.
+inherit a weaker classification from the base capability.
+
+Host permission is deliberately not represented as a model-supplied field. An
+MCP client requests execution with ``execute=true``; Claude Code or Codex then
+owns any human approval prompt around that exact call. The runtime still blocks
+forbidden capabilities and preserves the effective safety class in its result.
 """
 
 from __future__ import annotations
@@ -28,13 +33,10 @@ class CapabilityConfigError(ValueError):
 class CapabilityTool:
     name: str
     argv: tuple[str, ...]
-    check_argv: tuple[str, ...] = ()
-    verify_argv: tuple[str, ...] = ()
-    rollback_argv: tuple[str, ...] = ()
 
     @property
     def executable(self) -> str:
-        return (self.check_argv or self.argv)[0]
+        return self.argv[0]
 
 
 @dataclass(frozen=True)
@@ -54,10 +56,8 @@ class Capability:
         return self.safety == "forbidden"
 
 
-def _argv(value: Any, *, field: str, allow_empty: bool = False) -> tuple[str, ...]:
-    if value is None and allow_empty:
-        return ()
-    if not isinstance(value, list) or (not value and not allow_empty):
+def _argv(value: Any, *, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
         raise CapabilityConfigError(f"{field} must be a non-empty list")
     if not all(isinstance(item, str) and item for item in value):
         raise CapabilityConfigError(f"{field} entries must be non-empty strings")
@@ -121,21 +121,6 @@ def load_capabilities(path: Optional[Path] = None) -> dict[str, Capability]:
                 CapabilityTool(
                     name=name,
                     argv=_argv(tool.get("argv"), field=f"{cap_id}.{name}.argv"),
-                    check_argv=_argv(
-                        tool.get("check_argv"),
-                        field=f"{cap_id}.{name}.check_argv",
-                        allow_empty=True,
-                    ),
-                    verify_argv=_argv(
-                        tool.get("verify_argv"),
-                        field=f"{cap_id}.{name}.verify_argv",
-                        allow_empty=True,
-                    ),
-                    rollback_argv=_argv(
-                        tool.get("rollback_argv"),
-                        field=f"{cap_id}.{name}.rollback_argv",
-                        allow_empty=True,
-                    ),
                 )
             )
 
@@ -176,7 +161,6 @@ def run_capability(
     capability_id: str,
     *,
     execute: bool = False,
-    user_approved: bool = False,
     extra_args: Optional[list[str]] = None,
     cwd: Optional[str] = None,
     timeout_seconds: int = 120,
@@ -184,11 +168,10 @@ def run_capability(
 ) -> dict[str, Any]:
     """Plan or execute a configured capability.
 
-    The Claude Code hook is the host permission authority. The server also
-    requires an explicit acknowledgement for reversible and approval-required
-    execution so direct MCP use cannot silently bypass the same boundary.
-    Child processes receive DEVNULL stdin so they cannot consume the MCP stdio
-    transport if they unexpectedly become interactive.
+    ``execute=true`` means the MCP client is requesting the concrete action.
+    The active host owns any human approval prompt for that same tool call. The
+    runtime independently blocks forbidden capabilities and never infers host
+    approval from a model-controlled boolean.
     """
     capabilities = load_capabilities(path)
     capability = capabilities.get(capability_id)
@@ -215,7 +198,6 @@ def run_capability(
 
     safety_class = effective_safety(capability, extra_args)
     argv = [*tool.argv, *extra_args]
-    requires_user_approval = safety_class in {"reversible", "approval-required"}
     plan: dict[str, Any] = {
         "status": "planned",
         "capability": capability.id,
@@ -225,21 +207,13 @@ def run_capability(
         "tool": tool.name,
         "argv": argv,
         "command": command_display(argv),
-        "verify_argv": list(tool.verify_argv),
-        "rollback_argv": list(tool.rollback_argv),
-        "requires_user_approval": requires_user_approval,
+        "requires_host_approval": safety_class in {"reversible", "approval-required"},
     }
 
     if not execute:
         return plan
     if safety_class == "forbidden":
         return {**plan, "status": "blocked", "error": "Capability is forbidden"}
-    if requires_user_approval and not user_approved:
-        return {
-            **plan,
-            "status": "approval_required",
-            "error": "Host approval acknowledgement is required for this effective capability request",
-        }
 
     run_cwd: Optional[Path] = None
     if cwd:
@@ -259,7 +233,7 @@ def run_capability(
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return {**plan, "status": "failed", "error": str(exc)}
+        return {**plan, "status": "failed", "error": str(exc), "execution_started": True}
 
     return {
         **plan,
@@ -268,4 +242,5 @@ def run_capability(
         "stdout": result.stdout[-8000:],
         "stderr": result.stderr[-4000:],
         "succeeded": result.returncode == 0,
+        "execution_started": True,
     }
