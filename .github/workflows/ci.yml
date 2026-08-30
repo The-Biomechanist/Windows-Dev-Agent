@@ -79,6 +79,9 @@ jobs:
           sha = source.get("sha", "")
           assert re.fullmatch(r"[0-9a-f]{40}", sha), source
           assert "ref" not in source, source
+
+          subprocess.check_call(["git", "merge-base", "--is-ancestor", sha, "HEAD"])
+
           pinned_manifest = json.loads(
               subprocess.check_output(
                   ["git", "show", f"{sha}:.codex-plugin/plugin.json"],
@@ -88,5 +91,28 @@ jobs:
           current_manifest = json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8"))
           assert pinned_manifest["name"] == current_manifest["name"] == "windows-dev-agent"
           assert pinned_manifest["version"] == current_manifest["version"]
-          print(f"Marketplace pins verified payload {sha} version {pinned_manifest['version']}")
+
+          payload_paths = [
+              ".claude-plugin",
+              ".codex-plugin",
+              ".mcp.json",
+              ".mcp.codex.json",
+              "agents",
+              "commands",
+              "hooks",
+              "skills",
+              "src",
+              "capabilities.yaml",
+              "apm.yml",
+          ]
+          drift = [
+              line
+              for line in subprocess.check_output(
+                  ["git", "diff", "--name-only", sha, "HEAD", "--", *payload_paths],
+                  text=True,
+              ).splitlines()
+              if line
+          ]
+          assert not drift, f"Marketplace payload is stale relative to release head: {drift}"
+          print(f"Marketplace pins exact plugin payload {sha} version {pinned_manifest['version']}")
           '@ | python -
