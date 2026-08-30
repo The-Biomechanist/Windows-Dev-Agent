@@ -1,10 +1,4 @@
-"""Print a concise Windows Dev Agent audit summary.
-
-When invoked by Claude Code's Stop hook, the current hook payload is read from
-stdin and the persistent log is filtered to the matching session_id. Direct
-invocation without a session id reports aggregate history and labels it as such.
-Permission denials are reported separately from tool execution failures.
-"""
+"""Concise Windows Dev Agent audit summaries with explicit unknown outcomes."""
 
 from __future__ import annotations
 
@@ -18,7 +12,7 @@ from typing import Any, Optional
 
 try:
     from .trace import resolve_log_file
-except ImportError:  # direct hook-script execution
+except ImportError:
     from trace import resolve_log_file
 
 
@@ -47,15 +41,33 @@ def load_events(
 def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
     event_types = Counter(str(event.get("event", "unknown")) for event in events)
     tools = Counter(str(event.get("tool_name", "unknown")) for event in events if event.get("tool_name"))
-    failures = [event for event in events if event.get("success") is False]
+    outcomes = Counter(
+        str(event.get("execution_outcome"))
+        for event in events
+        if event.get("execution_outcome") in {"succeeded", "failed", "unknown", "not_executed", "not_applicable"}
+    )
+    # Backward compatibility for old log entries that predate execution_outcome.
+    legacy_failures = [
+        event for event in events
+        if "execution_outcome" not in event and event.get("success") is False
+    ]
     denied = [event for event in events if event.get("permission_denied") is True]
+    failed_tools = [
+        event for event in events
+        if event.get("execution_outcome") == "failed"
+        or ("execution_outcome" not in event and event.get("success") is False)
+    ]
     return {
         "total_events": len(events),
         "event_types": dict(event_types),
         "tools": dict(tools),
-        "failures": len(failures),
+        "execution_succeeded": outcomes.get("succeeded", 0),
+        "execution_failed": outcomes.get("failed", 0) + len(legacy_failures),
+        "execution_unknown": outcomes.get("unknown", 0),
+        "not_executed": outcomes.get("not_executed", 0),
+        "not_applicable": outcomes.get("not_applicable", 0),
         "permission_denials": len(denied),
-        "last_failure_tool": failures[-1].get("tool_name") if failures else None,
+        "last_failure_tool": failed_tools[-1].get("tool_name") if failed_tools else None,
         "last_denied_tool": denied[-1].get("tool_name") if denied else None,
     }
 
@@ -85,12 +97,12 @@ def main() -> int:
 
     session_id = args.session_id or _hook_session_id()
     events = load_events(resolve_log_file(args.data_dir), session_id=session_id)
-
     if not events:
-        if session_id:
-            print("Windows Dev Agent audit: no Windows Dev Agent events recorded in this session.")
-        else:
-            print("Windows Dev Agent audit: no persistent audit events recorded.")
+        print(
+            "Windows Dev Agent audit: no Windows Dev Agent events recorded in this session."
+            if session_id
+            else "Windows Dev Agent audit: no persistent audit events recorded."
+        )
         return 0
 
     summary = summarize(events)
@@ -99,7 +111,10 @@ def main() -> int:
     print(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(
         f"Events: {summary['total_events']} | "
-        f"Execution failures: {summary['failures']} | "
+        f"Execution succeeded: {summary['execution_succeeded']} | "
+        f"failed: {summary['execution_failed']} | "
+        f"unknown: {summary['execution_unknown']} | "
+        f"not executed: {summary['not_executed']} | "
         f"Permission denials: {summary['permission_denials']}"
     )
     if summary["tools"]:
@@ -107,7 +122,7 @@ def main() -> int:
         for name, count in sorted(summary["tools"].items()):
             print(f"  {name}: {count}")
     if summary["last_failure_tool"]:
-        print(f"Last failed tool: {summary['last_failure_tool']}")
+        print(f"Last known failed execution: {summary['last_failure_tool']}")
     if summary["last_denied_tool"]:
         print(f"Last denied request: {summary['last_denied_tool']}")
     print("=" * 43)
