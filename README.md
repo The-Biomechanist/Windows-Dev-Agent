@@ -20,6 +20,7 @@ shared Windows Dev Agent core
         ├── Claude Code adapter
         │     .claude-plugin/plugin.json
         │     .mcp.json
+        │     src/claude_server.py
         │     agents/
         │     commands/
         │     hooks/hooks.json
@@ -28,9 +29,9 @@ shared Windows Dev Agent core
               .codex-plugin/plugin.json
               .mcp.codex.json
               .agents/plugins/marketplace.json
-              hooks/codex-hooks.json
               src/codex_server.py
-              src/safety/codex_gate.py
+              hooks/codex-hooks.json
+              src/safety/codex_*.py
               src/observability/codex_*.py
 ```
 
@@ -47,11 +48,11 @@ Host adapters own only host-specific packaging, path binding, permission integra
 | `win-setup` | Repair or bootstrap missing/broken Windows development prerequisites without rewriting unrelated machine state. |
 | `ecosystem-defrag` | Inventory agent/developer-tool overlap and plan or execute a reversible consolidation. |
 
-Claude slash commands are thin adapters to those skills rather than separate workflow copies:
+Claude slash commands are thin adapters to namespaced shared skills rather than separate workflow copies:
 
-- `/windows-dev-agent:env` → `env-inspect`
-- `/windows-dev-agent:plan <task>` → `workflow-plan`
-- `/windows-dev-agent:defrag` → `ecosystem-defrag`
+- `/windows-dev-agent:env` → `windows-dev-agent:env-inspect`
+- `/windows-dev-agent:plan <task>` → `windows-dev-agent:workflow-plan`
+- `/windows-dev-agent:defrag` → `windows-dev-agent:ecosystem-defrag`
 
 Codex consumes the shared skills directly.
 
@@ -120,12 +121,14 @@ The two hosts provide different installation/runtime geometry, so their adapters
 - `${CLAUDE_PLUGIN_DATA}` — persistent discovery cache and audit metadata;
 - `${CLAUDE_PROJECT_DIR}` — the active project and default project-scoped execution surface.
 
+`src/claude_server.py` is a thin package/version adapter over the shared server; it does not duplicate Windows behavior.
+
 ### Codex
 
 Codex installs plugins into its plugin cache, so that cache must **not** become the user's project by accident.
 
 - `.mcp.codex.json` starts the shared runtime through `src.codex_server` with plugin-root `cwd: "."`.
-- The adapter uses the host plugin-data directory when available; otherwise it falls back to a stable user-writable Codex data directory.
+- Codex legacy plugin hooks and MCP normalization do not expose one common plugin-data variable to both processes, so both adapters deliberately converge on the deterministic persistent root `${CODEX_HOME:-~/.codex}/plugins/data/windows-dev-agent`.
 - Project-scoped tools require the current Codex session/project directory explicitly:
   - `capability_run.cwd`
   - `workflow_plan.cwd`
@@ -133,7 +136,7 @@ Codex installs plugins into its plugin cache, so that cache must **not** become 
   - `ecosystem_scan.cwd`
   - `mcp_audit.cwd`
 
-The adapter rejects those calls when project identity is missing rather than operating on its installed cache.
+The adapter rejects those calls when project identity is missing rather than operating on its installed cache. Runtime bindings are scoped to a delegated Codex request and restored afterward, so loading both host adapters in one process does not make import order decide the active cache/project identity.
 
 ## Permission model
 
@@ -160,7 +163,8 @@ Codex has a different hook contract, so the adapter does **not** emulate Claude'
 - `.mcp.codex.json` sets native MCP tool approval policy:
   - read-only orchestration/discovery tools → `approve`;
   - `capability_run`, `package_install`, `sandbox_run` → `prompt`.
-- `hooks/codex-hooks.json` runs a Codex-specific `PreToolUse` guard that can deny known-forbidden effective actions but otherwise emits no permission decision and defers to Codex.
+- `PreToolUse` can deny a known-forbidden effective action but otherwise emits no permission decision.
+- `PermissionRequest` runs only after Codex has decided approval is needed. For the three plan-first tools it auto-allows only `execute: false`; an `execute: true` request receives no plugin decision and continues to Codex's real human approval prompt.
 - Shell execution remains subject to Codex's native shell/sandbox permission policy.
 
 This keeps the invariant simple: **Windows Dev Agent decides what operation fits; the host decides whether execution is permitted.**
@@ -235,20 +239,20 @@ GitHub Actions runs on `windows-latest` and checks:
 
 1. runtime compilation;
 2. the pytest regression suite;
-3. Claude MCP initialization and the exact 10-tool surface;
-4. Codex MCP initialization and the same exact 10-tool surface.
+3. Claude host-adapter MCP initialization, package version, and exact 10-tool surface;
+4. Codex host-adapter MCP initialization, package version, and the same exact 10-tool surface.
 
 The tests additionally discriminate:
 
 - Claude vs Codex manifest/component wiring;
 - root Git marketplace distribution;
 - Codex-safe MCP namespace selection;
-- per-tool Codex approval policy;
-- required Codex project identity;
-- deny-only Codex hook semantics;
+- per-tool Codex approval policy and plan-only `PermissionRequest` behavior;
+- required Codex project identity and cross-host binding restoration;
+- deny-only Codex `PreToolUse` semantics;
 - Codex-valid Stop-hook JSON;
-- host-specific plugin-data paths;
-- shared skill frontmatter and command-to-skill routing;
+- deterministic Codex audit/cache path shared by MCP and hooks;
+- shared skill frontmatter and namespaced Claude command-to-skill routing;
 - audit provenance and MCP transport isolation.
 
 For local development:
