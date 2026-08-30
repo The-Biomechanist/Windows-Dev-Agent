@@ -1,4 +1,4 @@
-"""Regression tests for post-0.4 runtime integrity seams."""
+"""Regression tests for runtime authority and boundary integrity."""
 
 from __future__ import annotations
 
