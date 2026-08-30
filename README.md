@@ -2,7 +2,7 @@
 
 Windows-native developer orchestration for **Claude Code and Codex**, built around one shared runtime and six shared procedural skills.
 
-Version **0.4.0** tightens the package around observable state and host-owned authority: environment discovery preserves unknown probe state, executing MCP calls use one real host permission boundary, Windows Sandbox stages the selected workload into the isolated VM, audit summaries keep unknown outcomes explicit, and user-level inventory is separated from project-local reads.
+Version **0.4.1** preserves the 0.4.0 authority/evidence model and tightens runtime integrity: retained audit queries span every still-retained log segment, workflow routing preserves tied and unavailable candidates instead of manufacturing a winner, and Windows Sandbox payload traversal rejects NTFS reparse/junction boundaries before descent.
 
 ## Architecture
 
@@ -157,7 +157,7 @@ WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by de
 
 A hostile Windows workload is not isolated merely because a Sandbox window launches. For `untrusted_windows`, supply workspace-relative `payload_paths` identifying the files/directories the inner command actually needs. The runtime:
 
-1. rejects absolute paths, `..` escapes, missing paths, symbolic-link escapes, overlapping selections, payloads over 10,000 filesystem entries, and payloads over 1 GiB total file bytes;
+1. rejects absolute paths, `..` escapes, missing paths, symbolic links, NTFS reparse/junction boundaries, overlapping selections, payloads over 10,000 filesystem entries, and payloads over 1 GiB total file bytes;
 2. stages the selected payload into a temporary bundle;
 3. maps only that generated bundle into Windows Sandbox, read-only;
 4. disables Sandbox networking and clipboard;
@@ -187,7 +187,7 @@ For execution-capable calls, the audit representation distinguishes:
 
 Codex PostToolUse may inspect the WDA MCP result **in memory** to derive that small status, then discards the raw response. A Windows Sandbox launch therefore remains `unknown`, never “zero failures.”
 
-`agent.log` is bounded to 2 MiB and one rotated predecessor (`agent.log.1`). Environment cache and audit state live outside the immutable plugin code tree.
+`agent.log` is bounded to 2 MiB and one rotated predecessor (`agent.log.1`). `logs_query` reads both retained segments in chronological order. Environment cache and audit state live outside the immutable plugin code tree.
 
 ## Capability catalog
 
@@ -203,7 +203,7 @@ GitHub Actions runs on `windows-latest` across Python **3.9** and **3.13** and c
 2. the contract-focused pytest suite;
 3. the **actual shipped PowerShell discovery producer** on the Windows runner;
 4. exact MCP initialization/version/tool surfaces for Claude and Codex;
-5. when the canonical release index is present, that its immutable SHA resolves to a Codex plugin manifest with the same published version.
+5. when the canonical release index is present, that its immutable SHA resolves to a byte-identical published payload outside the marketplace index itself.
 
 The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness, Sandbox payload staging/path/resource containment, WSL project binding, audit outcome uncertainty/retention, MCP summary minimization, host adapter wiring, and MCP transport isolation.
 
