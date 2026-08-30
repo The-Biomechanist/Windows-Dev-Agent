@@ -62,31 +62,74 @@ jobs:
           '@ | python -
       - name: Release index identity
         shell: pwsh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
         run: |
           @'
           import json
+          import os
           from pathlib import Path
           import re
           import subprocess
 
-          index = Path(".agents/plugins/marketplace.json")
+          index_path = ".agents/plugins/marketplace.json"
+          index = Path(index_path)
           if not index.exists():
               print("No marketplace index in immutable plugin payload; nothing to verify.")
               raise SystemExit(0)
+
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
 
           market = json.loads(index.read_text(encoding="utf-8"))
           source = market["plugins"][0]["source"]
           sha = source.get("sha", "")
           assert re.fullmatch(r"[0-9a-f]{40}", sha), source
-          assert "ref" not in source, source
-          pinned_manifest = json.loads(
-              subprocess.check_output(
-                  ["git", "show", f"{sha}:.codex-plugin/plugin.json"],
-                  text=True,
-              )
-          )
+          assert "ref" not in source and "path" not in source, source
+
+          subprocess.check_call(["git", "merge-base", "--is-ancestor", sha, "HEAD"])
+          pinned_manifest = json.loads(git("show", f"{sha}:.codex-plugin/plugin.json"))
           current_manifest = json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8"))
           assert pinned_manifest["name"] == current_manifest["name"] == "windows-dev-agent"
           assert pinned_manifest["version"] == current_manifest["version"]
-          print(f"Marketplace pins verified payload {sha} version {pinned_manifest['version']}")
+
+          head = os.environ.get("PR_HEAD_SHA", "").strip()
+          base = os.environ.get("PR_BASE_SHA", "").strip()
+          if head and base:
+              changed = [line for line in git("diff", "--name-only", f"{base}...{head}").splitlines() if line]
+
+              def is_payload(path):
+                  if path in {
+                      "capabilities.yaml",
+                      "requirements.txt",
+                      "apm.yml",
+                      ".mcp.json",
+                      ".mcp.codex.json",
+                  }:
+                      return True
+                  return path.startswith((
+                      ".claude-plugin/",
+                      ".codex-plugin/",
+                      "src/",
+                      "skills/",
+                      "hooks/",
+                      "commands/",
+                      "agents/",
+                  ))
+
+              payload_changed = any(is_payload(path) for path in changed)
+              index_changed = index_path in changed
+              if payload_changed:
+                  assert index_changed, "Executable/plugin payload changed without updating the marketplace pin"
+                  expected_payload = git("rev-parse", f"{head}^")
+                  assert sha == expected_payload, (
+                      f"Marketplace pins {sha}, but the final marketplace-only commit must pin its exact parent payload {expected_payload}"
+                  )
+                  final_delta = [line for line in git("diff", "--name-only", expected_payload, head).splitlines() if line]
+                  assert final_delta == [index_path], (
+                      f"Final release-index commit must change only {index_path}; got {final_delta}"
+                  )
+
+          print(f"Marketplace pins verified immutable payload {sha} version {pinned_manifest['version']}")
           '@ | python -
