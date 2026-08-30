@@ -119,8 +119,10 @@ class EnvironmentDiscovery:
         self.cache_dir = Path(configured).expanduser()
         self.cache_file = self.cache_dir / CACHE_NAME
         self.generation_file = self.cache_dir / GENERATION_NAME
+        self.last_execution_started = False
 
     def discover(self, force_refresh: bool = False) -> EnvironmentSnapshot:
+        self.last_execution_started = False
         expected_generation = ""
         cache_usable = self.cache_enabled
         if self.cache_enabled:
@@ -172,6 +174,7 @@ class EnvironmentDiscovery:
             stdout_bytes=MAX_DISCOVERY_STDOUT_BYTES,
             stderr_bytes=MAX_DISCOVERY_STDERR_BYTES,
         )
+        self.last_execution_started = result.get("execution_started") is True
         if result.get("timed_out") is True:
             raise DiscoveryError("Discovery script timed out")
         if result.get("execution_started") is False:

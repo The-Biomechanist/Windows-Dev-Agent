@@ -306,6 +306,7 @@ async def handle_env_inspect(args: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "ok" if snapshot.success else "degraded",
         "snapshot": snapshot.to_dict(),
+        "execution_started": discovery.last_execution_started,
     }
 
 
@@ -319,6 +320,7 @@ async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
     category = args.get("category", "all")
     scan = candidates if category == "all" else {category: candidates.get(str(category), [])}
     output: dict[str, Any] = {}
+    execution_started = False
     for group, commands in scan.items():
         output[group] = {}
         for command in commands:
@@ -327,6 +329,7 @@ async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
                 output[group][command] = {"available": False, "version": None}
                 continue
             probe = run_bounded([path, "--version"], timeout=5)
+            execution_started = execution_started or probe.get("execution_started") is True
             lines = (probe.get("stdout") or probe.get("stderr") or "").strip().splitlines()
             output[group][command] = {
                 "available": True,
@@ -334,6 +337,7 @@ async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
                 "version": lines[0] if probe.get("succeeded") and lines else None,
                 "version_status": "known" if probe.get("succeeded") and lines else "unknown",
             }
+    output["execution_started"] = execution_started
     return output
 
 
@@ -1026,6 +1030,7 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
     if include_packages and not include_host:
         return {"status": "invalid_input", "error": "include_packages requires include_host=true"}
 
+    execution_started = False
     inventory: dict[str, Any] = {
         "project_root": str(project_dir),
         "host_inventory_included": include_host,
@@ -1068,6 +1073,7 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
         code = resolve_executable("code")
         if code:
             result = run_bounded([code, "--list-extensions"], timeout=20)
+            execution_started = execution_started or result.get("execution_started") is True
             if result.get("succeeded"):
                 inventory["vscode"]["installed"] = [line for line in result.get("stdout", "").splitlines() if line]
             else:
@@ -1083,6 +1089,7 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
             winget = resolve_executable("winget")
             if winget:
                 result = run_bounded([winget, "list", "--source", "winget", "--disable-interactivity"], timeout=90, stdout_bytes=64 * 1024)
+                execution_started = execution_started or result.get("execution_started") is True
                 if result.get("succeeded"):
                     inventory["packages"]["items"] = result.get("stdout", "").splitlines()[:300]
                 else:
@@ -1092,7 +1099,7 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
 
     overlap_markers = ("cline", "roo", "continue", "copilot", "aider", "agent")
     inventory["overlap_hints"] = [item for item in inventory["vscode"]["installed"] if any(marker in item.lower() for marker in overlap_markers)]
-    return {"status": "ok", "inventory": inventory}
+    return {"status": "ok", "inventory": inventory, "execution_started": execution_started}
 
 
 def _load_log_events() -> list[dict[str, Any]]:
