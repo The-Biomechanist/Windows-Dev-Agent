@@ -19,10 +19,26 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 DISCOVERY_SCRIPT = Path(__file__).parent / "discovery.ps1"
 DEFAULT_CACHE_DIR = ROOT / ".cache"
 CACHE_TTL_SECONDS = 300
+DISCOVERY_TIMEOUT_SECONDS = 30
 
 
 class DiscoveryError(Exception):
     """Raised when discovery cannot produce even a degraded snapshot."""
+
+
+def _system_powershell() -> Optional[Path]:
+    """Resolve the Windows-owned PowerShell executable without PATH lookup."""
+    windows_root = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
+    if not windows_root:
+        return None
+    candidate = (
+        Path(windows_root)
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    return candidate if candidate.is_file() else None
 
 
 class EnvironmentDiscovery:
@@ -51,10 +67,16 @@ class EnvironmentDiscovery:
         if not DISCOVERY_SCRIPT.exists():
             raise DiscoveryError(f"Discovery script not found: {DISCOVERY_SCRIPT}")
 
+        powershell = _system_powershell()
+        if powershell is None:
+            return self._fallback_discovery(
+                "System Windows PowerShell executable was not established"
+            )
+
         try:
             result = subprocess.run(
                 [
-                    "powershell.exe",
+                    str(powershell),
                     "-NoProfile",
                     "-NonInteractive",
                     "-ExecutionPolicy",
@@ -65,13 +87,13 @@ class EnvironmentDiscovery:
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=DISCOVERY_TIMEOUT_SECONDS,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise DiscoveryError("Discovery script timed out") from exc
         except FileNotFoundError:
-            return self._fallback_discovery("PowerShell discovery unavailable")
+            return self._fallback_discovery("System Windows PowerShell disappeared before discovery")
         except OSError as exc:
             raise DiscoveryError(f"Failed to execute discovery: {exc}") from exc
 
