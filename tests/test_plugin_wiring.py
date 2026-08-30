@@ -45,12 +45,12 @@ def test_hook_scripts_are_rooted_and_use_persistent_plugin_data():
     assert all("${CLAUDE_PLUGIN_DATA}" in command for command in commands)
 
 
-def test_pretool_hook_covers_powershell_and_mutation_capable_mcp_tools():
+def test_pretool_hook_covers_shell_mutations_and_broader_mcp_reads():
     config = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     matcher = re.compile(config["hooks"]["PreToolUse"][0]["matcher"])
     assert matcher.search("PowerShell")
     assert matcher.search("Bash")
-    for name in ("package_install", "sandbox_run", "capability_run"):
+    for name in ("package_install", "sandbox_run", "capability_run", "ecosystem_scan", "mcp_audit"):
         assert matcher.search(INSTALLED_PREFIX + name)
 
 
