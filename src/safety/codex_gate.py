@@ -1,8 +1,10 @@
 """Codex PreToolUse adapter for Windows Dev Agent safety classification.
 
-Codex does not support Claude Code's ``permissionDecision: ask`` semantics in
-PreToolUse. This adapter therefore denies only actions the shared classifier
-marks forbidden and otherwise defers to Codex's native approval policy.
+Current Codex can express ``ask`` from PreToolUse, but Windows Dev Agent keeps
+native MCP approval policy as the prompt authority. This adapter therefore
+denies only actions the shared classifier marks forbidden and otherwise defers
+to Codex. PermissionRequest handles the small set of trusted plan-only
+shortcuts separately.
 """
 
 from __future__ import annotations
