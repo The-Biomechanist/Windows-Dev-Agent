@@ -8,7 +8,7 @@
     "tools": {
       "env_inspect": {"approval_mode": "approve"},
       "tool_discover": {"approval_mode": "prompt"},
-      "workflow_plan": {"approval_mode": "approve"},
+      "workflow_plan": {"approval_mode": "prompt"},
       "package_search": {"approval_mode": "prompt"},
       "logs_query": {"approval_mode": "approve"},
       "ecosystem_scan": {"approval_mode": "prompt"},
