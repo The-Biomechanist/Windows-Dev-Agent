@@ -2,7 +2,7 @@
 
 Windows-native developer orchestration for **Claude Code and Codex**, built around one shared runtime and six shared procedural skills.
 
-Version **0.4.0** tightens the package around observable state and host-owned authority: environment discovery preserves unknown probe state, executing MCP calls use one real host permission boundary, Windows Sandbox stages the selected workload into the isolated VM, audit summaries keep unknown outcomes explicit, and user-level inventory is separated from project-local reads.
+Version **0.4.1** preserves the 0.4.0 authority and evidence model while tightening execution identity: plan-first capability, package, and isolation calls bind the resolved executable/route to a `plan_fingerprint`, stale plans fail before process start, discovery probes execute the same executable path they report, and hard environment-discovery failures remain inside the canonical tri-state snapshot model.
 
 ## Architecture
 
@@ -100,7 +100,7 @@ model constructs exact tool call
 → if permitted, the same call reaches the MCP runtime
 ```
 
-Plan-only calls use `execute: false`. Mutation calls use `execute: true`. The shared runtime independently blocks capabilities classified `forbidden`; it does not pretend to prove that the host prompt occurred.
+Plan-only calls use `execute: false`. Mutation calls use `execute: true`. For the three plan-first executors, the plan returns an opaque `plan_fingerprint` that must be carried unchanged into execution. The fingerprint is only a freshness/identity guard over the reviewed route/executable/argv/project state; it is not authorization and never substitutes for the host permission boundary. The shared runtime independently blocks capabilities classified `forbidden`; it does not pretend to prove that the host prompt occurred.
 
 ### Claude Code
 
@@ -131,7 +131,7 @@ Availability fields are tri-state:
 - `false` — observed absent/disabled;
 - `null` — the probe did not establish the fact.
 
-The shipped PowerShell producer uses live-image optional-feature queries (`Get-WindowsOptionalFeature -Online`). Probe failures are recorded in `snapshot.errors` and make the snapshot degraded rather than silently becoming `false`. Windows Sandbox is queried using its canonical `Containers-DisposableClientVM` optional-feature identity.
+The shipped PowerShell producer uses live-image optional-feature queries (`Get-WindowsOptionalFeature -Online`). Probe failures are recorded in `snapshot.errors` and make the snapshot degraded rather than silently becoming `false`. Windows Sandbox is queried using its canonical `Containers-DisposableClientVM` optional-feature identity. If environment discovery itself fails before producing a normal snapshot, `env_inspect` still returns that same canonical snapshot shape with unresolved availability left `null`; it does not switch to a second PATH-based truth model.
 
 The cache stores the same canonical representation returned to consumers; it is not a second serialization format. Cache TTL is five minutes, and package-install execution invalidates the cached snapshot even on a failed installer because partial mutation is possible.
 
@@ -139,9 +139,9 @@ Discovery intentionally does **not** persist username/domain, Git user identity,
 
 ## Package setup
 
-`package_search` is the package-identity producer. It is non-mutating by intent, but it executes the selected package manager and may contact its configured source, so the active host remains authoritative for the call. A package mutation should use an exact ID from the user/authoritative project state or resolve one through search before `package_install`.
+`package_search` is the package-identity producer. It is non-mutating by intent, but it executes the selected package manager and may contact its configured source, so the active host remains authoritative for the call. Search resolves the package-manager executable once and executes that same path rather than probing one PATH target and invoking another by bare name. A package mutation should use an exact ID from the user/authoritative project state or resolve one through search before `package_install`.
 
-`package_install(execute:false)` returns the concrete argv for review. `execute:true` requests that exact mutation under the active host permission policy. Installer exit is not treated as proof that the requested task now works; verify executable/version/task state afterward.
+`package_install(execute:false)` returns the resolved package-manager executable, concrete argv, and `plan_fingerprint` for review. `execute:true` must carry that fingerprint; if executable/plan state changed, the runtime returns `stale_plan` with `execution_started:false` instead of silently substituting the new binding. A fresh plan must then be reviewed. Host approval still surrounds the executing call. Installer exit is not treated as proof that the requested task now works; verify executable/version/task state afterward.
 
 ## Isolation
 
@@ -151,7 +151,7 @@ Discovery intentionally does **not** persist username/domain, Git user identity,
 - `project_reproducibility` → configured project Dev Container;
 - `untrusted_windows` → Windows Sandbox.
 
-WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by default. Dev Container execution uses the project configuration and `sh -lc`.
+WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by default. Dev Container execution uses the project configuration and `sh -lc`. Sandbox plans bind the selected environment, resolved backend executable, project, payload paths, launch argv, and inner command into the same freshness guard; a changed backend requires a fresh plan instead of silent substitution.
 
 ### Windows Sandbox payloads
 
@@ -182,7 +182,7 @@ For execution-capable calls, the audit representation distinguishes:
 - `succeeded` — result establishes successful execution;
 - `failed` — result establishes failed execution;
 - `unknown` — execution/launch occurred but the available observation does not establish outcome;
-- `not_executed` — plan/block/unavailable/invalid input prevented execution;
+- `not_executed` — plan/block/unavailable/invalid/stale-plan state prevented execution;
 - `not_applicable` — the lifecycle event has no execution outcome to classify, including permission/control events.
 
 Codex PostToolUse may inspect the WDA MCP result **in memory** to derive that small status, then discards the raw response. A Windows Sandbox launch therefore remains `unknown`, never “zero failures.”
@@ -191,7 +191,7 @@ Codex PostToolUse may inspect the WDA MCP result **in memory** to derive that sm
 
 ## Capability catalog
 
-`capabilities.yaml` contains only fields with live consumers: description, safety, tags, and argv tools. Configured commands execute with `shell=False` and `DEVNULL` stdin. Caller-supplied `extra_args` upgrade effective authority to approval-required rather than inheriting the base capability class.
+`capabilities.yaml` contains only fields with live consumers: description, safety, tags, and argv tools. Configured commands execute with `shell=False` and `DEVNULL` stdin. Caller-supplied `extra_args` upgrade effective authority to approval-required rather than inheriting the base capability class. Capability planning resolves the selected tool to a concrete executable path and fingerprints that path with the effective argv, working directory, and safety class; execution rejects a missing or changed plan fingerprint before starting a process.
 
 The current catalog covers Git inspection, Python/JavaScript linting, Python/.NET tests, .NET build, and GitHub PR creation.
 
@@ -203,9 +203,9 @@ GitHub Actions runs on `windows-latest` across Python **3.9** and **3.13** and c
 2. the contract-focused pytest suite;
 3. the **actual shipped PowerShell discovery producer** on the Windows runner;
 4. exact MCP initialization/version/tool surfaces for Claude and Codex;
-5. when the canonical release index is present, that its immutable SHA resolves to a Codex plugin manifest with the same published version.
+5. release-index immutability: the pinned SHA resolves to the published Codex manifest, and a PR that changes executable plugin payload must end with one marketplace-only commit pinning the exact immediately preceding payload commit.
 
-The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness, Sandbox payload staging/path/resource containment, WSL project binding, audit outcome uncertainty/retention, MCP summary minimization, host adapter wiring, and MCP transport isolation.
+The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, executable and plan freshness, host/project read boundaries, argument-dependent safety, package freshness, Sandbox payload staging/path/resource containment, WSL project binding, audit outcome uncertainty/retention, MCP summary minimization, host adapter wiring, and MCP transport isolation.
 
 For local development:
 
