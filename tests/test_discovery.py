@@ -6,9 +6,7 @@ from pathlib import Path
 import subprocess
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from src.discovery.discovery import DiscoveryError, EnvironmentDiscovery
+from src.discovery.discovery import EnvironmentDiscovery
 from src.models.environment import (
     DevDrive,
     DevelopmentTools,
@@ -175,7 +173,11 @@ def test_invalid_json_returns_degraded_fallback(mock_run, tmp_path: Path):
 
 
 @patch("src.discovery.discovery.subprocess.run")
-def test_timeout_remains_hard_discovery_error(mock_run, tmp_path: Path):
+def test_timeout_returns_canonical_degraded_snapshot(mock_run, tmp_path: Path):
     mock_run.side_effect = subprocess.TimeoutExpired("powershell", 30)
-    with pytest.raises(DiscoveryError):
-        EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
+    snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
+    payload = snapshot.to_dict()
+    assert snapshot.success is False
+    assert any("timed out" in error for error in snapshot.errors)
+    assert payload["probe_states"]["wsl"] == "unknown"
+    assert payload["probe_states"]["windows_sandbox"] == "unknown"
