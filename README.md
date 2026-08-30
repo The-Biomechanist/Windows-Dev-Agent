@@ -9,11 +9,10 @@ The project deliberately keeps the control plane Windows-native: PowerShell, Win
 From a checkout of this repository:
 
 ```text
-python -m pip install -r requirements.txt
 claude --plugin-dir .
 ```
 
-The plugin manifest declares version **0.2.0** and Claude Code **1.0.33+**.
+The runtime uses only the Python standard library. No `pip install` step is required for the plugin or its MCP server. The plugin manifest declares version **0.2.0** and Claude Code **1.0.33+**.
 
 If you publish or install it through a configured Claude Code marketplace or APM registry, the package name is `windows-dev-agent`.
 
@@ -25,11 +24,7 @@ If you publish or install it through a configured Claude Code marketplace or APM
 
 ## MCP tools
 
-The MCP backend runs over stdio with:
-
-```text
-python -m src.mcp.server
-```
+The MCP backend runs over stdio. The bundled `.mcp.json` roots the server at `${CLAUDE_PLUGIN_ROOT}`, so it starts from the plugin installation directory rather than depending on the user's project working directory.
 
 | Tool | Purpose |
 | --- | --- |
@@ -57,13 +52,15 @@ The bundled `PreToolUse` hook reads Claude Code's JSON hook event on stdin and r
 | `checkpoint` | `ask` — Claude Code prompts the user |
 | `forbidden` | `deny` |
 
-Unknown Bash commands default to **ask**, not allow. Package installation and sandbox launch are plan-first: `execute: false` returns the exact intended action; executing calls are forced through the host prompt. Approval-required capabilities such as PR publication are classified from the same `capabilities.yaml` catalog the MCP server uses.
+Unknown Bash commands default to **ask**, not allow. Package installation and sandbox launch are plan-first: `execute: false` returns the intended action; executing calls are forced through the host prompt. Planning Windows Sandbox may materialize a temporary `.wsb` bundle, so that planning path is classified as reversible rather than read-only. Approval-required capabilities such as PR publication are classified from the same capability catalog the MCP server uses.
 
 The MCP server also refuses forbidden capabilities and requires the executing request to acknowledge the approval boundary. That is defense in depth; the Claude Code hook is the human-confirmation authority when the server is used through this plugin.
 
 ## Capability routing
 
-`capabilities.yaml` is intentionally small and executable rather than a catalog of aspirational stubs. It currently covers:
+`capabilities.yaml` is intentionally small and executable rather than a catalog of aspirational stubs. To keep plugin startup self-contained, it uses the **JSON-compatible subset of YAML** and is parsed with Python's standard `json` module—no third-party YAML package is required.
+
+It currently covers:
 
 - Git status inspection;
 - Python and JavaScript/TypeScript linting;
@@ -71,7 +68,7 @@ The MCP server also refuses forbidden capabilities and requires the executing re
 - .NET builds;
 - GitHub PR creation as an approval-required publication action.
 
-Tool commands are stored as YAML argument arrays. Runtime execution appends extra arguments as separate argv entries and never interpolates them into a shell command.
+Tool commands are stored as argument arrays. Runtime execution appends extra arguments as separate argv entries and never interpolates them into a shell command.
 
 ## Isolation
 
@@ -115,14 +112,13 @@ Claude Code plugin layer
           └─ src/models/
 ```
 
-Earlier unused graph/workflow/schema scaffolding and tracked cache material were removed rather than preserved as architecture theater.
+Earlier unused graph/workflow/schema scaffolding and tracked cache material were removed rather than preserved as architecture theater. Machine-local Claude permission settings are also excluded from the distribution.
 
 ## Requirements
 
 - Windows 10 or Windows 11 for full native behavior;
 - PowerShell 5.1+;
 - Python 3.9+;
-- `PyYAML` (declared in `requirements.txt`);
 - Claude Code 1.0.33+ for the plugin surface.
 
 Some read-only/runtime tests are portable, but release verification runs on Windows.
