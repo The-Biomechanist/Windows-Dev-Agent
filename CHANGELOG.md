@@ -14,13 +14,15 @@ Production-hardening and public-release cleanup.
 - Consolidate Claude and Codex onto one bounded stdio transport.
 - Add strict runtime MCP argument validation and request/resource bounds.
 - Remove the directly executable host-neutral MCP core path.
-- Consolidate captured external execution into a bounded streaming runner and execute the exact resolved executable identity.
+- Consolidate captured external execution into a bounded streaming runner.
+- Bind plan-first capability/package/Sandbox execution to the absolute executable identity returned by the reviewed plan; changed resolution returns `stale_plan` before execution, staging, or mutation and does not become a second approval token.
 - Resolve runtime-owned Windows control-plane binaries such as discovery PowerShell, WSL, and Windows Sandbox from trusted Windows locations rather than PATH; Claude also binds its bootstrap PowerShell to the Windows system installation.
 
 ### Isolation
 
 - Require an explicit semantic isolation requirement for every `sandbox_run` call.
 - Reject explicit backend/requirement combinations that do not provide the requested property.
+- Require an actual `.devcontainer/devcontainer.json` or root `.devcontainer.json` before treating a project as Dev Container-configured.
 - Require payload staging for every `untrusted_windows` request.
 - Disable vGPU, networking, audio input, video input, printer redirection, and clipboard redirection for the hostile-Windows route.
 - Keep generated `.wsb` configuration outside the mapped read-only Sandbox share.
@@ -34,6 +36,7 @@ Production-hardening and public-release cleanup.
 - Fail package-install execution closed when the cache mutation/invalidation transition cannot be established before launch.
 - Serialize audit rotation/append between Windows hook processes.
 - Add audit schema version and explicit lifecycle fields while preserving legacy log readability.
+- Classify rejected `stale_plan` requests as `not_executed`, distinct from runtime execution failure.
 - Stop exposing the physical WDA data directory from `logs_query`.
 - Separate host-neutral safety classification from Claude's hook adapter.
 
