@@ -188,6 +188,7 @@ def _run(argv: list[str], *, cwd: Optional[Path] = None, timeout: int = 30) -> d
         result = subprocess.run(
             argv,
             cwd=str(cwd) if cwd else None,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -375,7 +376,7 @@ async def handle_package_search(args: dict[str, Any]) -> dict[str, Any]:
         return {"status": "invalid_input", "error": "query must be 1-160 printable characters"}
     source = str(args.get("source", "winget"))
     commands = {
-        "winget": ["winget", "search", "--query", query, "--source", "winget", "--accept-source-agreements"],
+        "winget": ["winget", "search", "--query", query, "--source", "winget", "--disable-interactivity"],
         "chocolatey": ["choco", "search", query, "--limit-output"],
         "scoop": ["scoop", "search", query],
     }
@@ -580,7 +581,12 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
     if environment == "windows_sandbox":
         try:
             config_path, launch_argv = _prepare_windows_sandbox(command)
-            process = subprocess.Popen(launch_argv, cwd=str(workspace), shell=False)
+            process = subprocess.Popen(
+                launch_argv,
+                cwd=str(workspace),
+                stdin=subprocess.DEVNULL,
+                shell=False,
+            )
         except (OSError, RuntimeError) as exc:
             return {**plan, "status": "failed", "error": str(exc)}
         return {
@@ -708,7 +714,10 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
         inventory["packages"]["queried"] = True
         winget = shutil.which("winget")
         if winget:
-            result = _run([winget, "list", "--source", "winget"], timeout=90)
+            result = _run(
+                [winget, "list", "--source", "winget", "--disable-interactivity"],
+                timeout=90,
+            )
             if result.get("succeeded"):
                 inventory["packages"]["items"] = result.get("stdout", "").splitlines()[:300]
             else:
