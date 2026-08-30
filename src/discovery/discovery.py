@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 import json
 import logging
 import os
 from pathlib import Path
 import tempfile
-from typing import Optional
+import time
+from typing import Iterator, Optional
 import uuid
 
 from src.execution import resolve_windows_system_executable, run_bounded
@@ -26,6 +28,8 @@ MAX_DISCOVERY_STDOUT_BYTES = 1024 * 1024
 MAX_DISCOVERY_STDERR_BYTES = 64 * 1024
 CACHE_NAME = "environment.json"
 GENERATION_NAME = "environment.generation"
+CACHE_LOCK_NAME = "environment.lock"
+_CACHE_LOCK_TIMEOUT_SECONDS = 5.0
 
 
 class DiscoveryError(Exception):
@@ -55,15 +59,53 @@ def _atomic_text_write(path: Path, text: str) -> None:
         raise
 
 
+@contextmanager
+def _cache_lock(directory: Path) -> Iterator[None]:
+    """Serialize cache admission, invalidation, and publication across Windows processes."""
+    directory.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        yield
+        return
+
+    import msvcrt
+
+    lock_path = directory / CACHE_LOCK_NAME
+    with lock_path.open("a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        deadline = time.monotonic() + _CACHE_LOCK_TIMEOUT_SECONDS
+        acquired = False
+        while not acquired:
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                acquired = True
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Timed out acquiring environment cache lock")
+                time.sleep(0.01)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+
+
 def invalidate_environment_cache(data_dir: Path) -> bool:
     """Advance cache generation and remove any snapshot from the prior generation."""
     directory = Path(data_dir).expanduser()
     generation_file = directory / GENERATION_NAME
     cache_file = directory / CACHE_NAME
     try:
-        _atomic_text_write(generation_file, uuid.uuid4().hex)
-        cache_file.unlink(missing_ok=True)
-    except OSError:
+        with _cache_lock(directory):
+            _atomic_text_write(generation_file, uuid.uuid4().hex)
+            cache_file.unlink(missing_ok=True)
+    except (OSError, TimeoutError):
         return False
     return True
 
@@ -79,18 +121,31 @@ class EnvironmentDiscovery:
         self.generation_file = self.cache_dir / GENERATION_NAME
 
     def discover(self, force_refresh: bool = False) -> EnvironmentSnapshot:
-        if self.cache_enabled and not force_refresh:
-            cached = self._load_cache()
-            if cached is not None:
-                return cached
+        expected_generation = ""
+        cache_usable = self.cache_enabled
+        if self.cache_enabled:
+            try:
+                with _cache_lock(self.cache_dir):
+                    if not force_refresh:
+                        cached = self._load_cache()
+                        if cached is not None:
+                            return cached
+                    expected_generation = self._generation()
+            except (OSError, TimeoutError) as exc:
+                logger.warning("Environment cache unavailable for this discovery: %s", exc)
+                cache_usable = False
 
-        generation = self._generation()
         try:
             snapshot = self._run_discovery()
         except DiscoveryError as exc:
             snapshot = self._fallback_discovery(str(exc))
-        if self.cache_enabled:
-            self._save_cache(snapshot, expected_generation=generation)
+
+        if cache_usable:
+            try:
+                with _cache_lock(self.cache_dir):
+                    self._save_cache(snapshot, expected_generation=expected_generation)
+            except (OSError, TimeoutError) as exc:
+                logger.warning("Environment cache unavailable for snapshot publication: %s", exc)
         return snapshot
 
     def _run_discovery(self) -> EnvironmentSnapshot:
