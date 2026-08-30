@@ -30,7 +30,12 @@ from src.capabilities import (
     select_available_tool,
 )
 from src.discovery.discovery import EnvironmentDiscovery, invalidate_environment_cache
-from src.execution import resolve_executable, resolve_windows_system_executable, run_bounded
+from src.execution import (
+    executable_identity_matches,
+    resolve_executable,
+    resolve_windows_system_executable,
+    run_bounded,
+)
 from src.observability.trace import history_log_files
 
 logger = logging.getLogger(__name__)
@@ -62,6 +67,14 @@ def _bool_property(description: str, default: bool = False) -> dict[str, Any]:
     return {"type": "boolean", "description": description, "default": default}
 
 
+def _expected_executable_property() -> dict[str, Any]:
+    return {
+        "type": "string",
+        "maxLength": 4096,
+        "description": "Absolute executable path returned by the reviewed execute=false plan; required when execute=true",
+    }
+
+
 TOOLS = [
     {
         "name": "env_inspect",
@@ -87,7 +100,7 @@ TOOLS = [
     },
     {
         "name": "capability_run",
-        "description": "Plan or execute a named argv-based capability in the active project. The active host owns approval for the exact executing call.",
+        "description": "Plan or execute a named argv-based capability in the active project. Executing calls must bind the executable identity returned by the reviewed plan; the active host owns approval for the exact executing call.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -95,6 +108,7 @@ TOOLS = [
                 "extra_args": {"type": "array", "items": {"type": "string"}, "maxItems": 128, "default": []},
                 "cwd": {"type": "string", "description": "Working directory; defaults to the active host project"},
                 "execute": _bool_property("Execute instead of returning the concrete plan"),
+                "expected_executable": _expected_executable_property(),
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600, "default": 120},
             },
             "required": ["capability"],
@@ -127,20 +141,21 @@ TOOLS = [
     },
     {
         "name": "package_install",
-        "description": "Plan or execute one exact WinGet, Chocolatey, or Scoop install. Host approval surrounds the executing call.",
+        "description": "Plan or execute one exact WinGet, Chocolatey, or Scoop install. Executing calls must bind the executable identity returned by the reviewed plan; host approval surrounds the executing call.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "package_id": {"type": "string", "maxLength": 256},
                 "source": {"type": "string", "enum": ["winget", "chocolatey", "scoop"], "default": "winget"},
                 "execute": _bool_property("Execute the reviewed install plan"),
+                "expected_executable": _expected_executable_property(),
             },
             "required": ["package_id"],
         },
     },
     {
         "name": "sandbox_run",
-        "description": "Plan or run a command through WSL, a project Dev Container, or Windows Sandbox under an explicit isolation requirement.",
+        "description": "Plan or run a command through WSL, a project Dev Container, or Windows Sandbox under an explicit isolation requirement. Executing calls must bind the executable identity returned by the reviewed plan.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -159,6 +174,7 @@ TOOLS = [
                     "description": "Workspace-relative files/directories staged read-only into Windows Sandbox; required for every untrusted_windows request",
                 },
                 "execute": _bool_property("Launch the reviewed route"),
+                "expected_executable": _expected_executable_property(),
             },
             "required": ["command", "isolation_requirement"],
         },
@@ -331,6 +347,7 @@ async def handle_capability_run(args: dict[str, Any]) -> dict[str, Any]:
         extra_args=args.get("extra_args", []),
         cwd=str(cwd),
         timeout_seconds=args.get("timeout_seconds", 120),
+        expected_executable=args.get("expected_executable"),
     )
 
 
@@ -537,6 +554,7 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
         "package_id": package_id,
         "source": source,
         "safety_class": "approval-required",
+        "executable": resolved,
         "argv": argv,
         "command": command_display(argv),
         "requires_host_approval": True,
@@ -546,6 +564,21 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
         return plan
     if resolved is None:
         return {**plan, "status": "unavailable", "error": f"{configured[0]} is not installed", "execution_started": False}
+    expected_executable = args.get("expected_executable")
+    if not isinstance(expected_executable, str) or not expected_executable.strip():
+        return {
+            **plan,
+            "status": "invalid_input",
+            "error": "expected_executable from the reviewed plan is required for execution",
+            "execution_started": False,
+        }
+    if not executable_identity_matches(expected_executable, resolved[0]):
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "Resolved executable no longer matches the reviewed plan; obtain a fresh plan before execution",
+            "execution_started": False,
+        }
 
     cache_invalidated = invalidate_environment_cache(DATA_DIR)
     if not cache_invalidated:
@@ -710,10 +743,9 @@ def _cleanup_stale_sandbox_bundles() -> None:
         return
 
 
-def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]]) -> tuple[Path, Path, list[str]]:
-    sandbox_exe = _windows_sandbox_executable()
-    if not sandbox_exe:
-        raise RuntimeError("Windows Sandbox is not available")
+def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]], sandbox_executable: str) -> tuple[Path, Path, list[str]]:
+    if not isinstance(sandbox_executable, str) or not sandbox_executable:
+        raise RuntimeError("Windows Sandbox executable identity was not established")
     root = _sandbox_state_root()
     root.mkdir(parents=True, exist_ok=True)
     bundle_root = Path(tempfile.mkdtemp(prefix="run-", dir=str(root)))
@@ -757,7 +789,7 @@ def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]]) ->
             "</Configuration>\n",
             encoding="utf-8",
         )
-        return bundle_root, config_path, [sandbox_exe, str(config_path)]
+        return bundle_root, config_path, [sandbox_executable, str(config_path)]
     except Exception:
         shutil.rmtree(bundle_root, ignore_errors=True)
         raise
@@ -828,6 +860,7 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
         "project_dir": str(workspace),
         "payload_paths": [str(rel) for _, rel in payloads],
         "safety_class": "approval-required",
+        "executable": executable,
         "argv": argv,
         "command": command_display(argv),
         "launch_kind": launch_kind,
@@ -837,10 +870,26 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
     if args.get("execute") is not True:
         return plan
 
+    expected_executable = args.get("expected_executable")
+    if not isinstance(expected_executable, str) or not expected_executable.strip():
+        return {
+            **plan,
+            "status": "invalid_input",
+            "error": "expected_executable from the reviewed plan is required for execution",
+            "execution_started": False,
+        }
+    if not executable_identity_matches(expected_executable, executable):
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "Resolved executable no longer matches the reviewed plan; obtain a fresh plan before execution",
+            "execution_started": False,
+        }
+
     if environment == "windows_sandbox":
         _cleanup_stale_sandbox_bundles()
         try:
-            bundle_root, _config_path, launch_argv = _prepare_windows_sandbox(command, payloads)
+            bundle_root, _config_path, launch_argv = _prepare_windows_sandbox(command, payloads, executable)
         except (OSError, RuntimeError) as exc:
             return {**plan, "status": "failed", "error": str(exc), "execution_started": False}
         try:
