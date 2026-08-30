@@ -1,12 +1,14 @@
 """Claude Code PreToolUse safety gate.
 
-The gate classifies the effective requested action and returns Claude Code's
-structured permission decision. Only actions proven read-only are auto-allowed.
-Reversible/project-code execution, approval-required actions, and uncertain
-compound or dynamic shell commands ask the human. Forbidden actions are denied.
+This hook only tightens Claude Code's native permission system:
 
-A model-provided ``user_approved`` flag never bypasses the host permission
-surface.
+- forbidden effective actions are denied;
+- actions that Windows Dev Agent knows require explicit approval return ``ask``;
+- read-only or reversible actions make no plugin permission decision and remain
+  subject to Claude Code's ordinary permission flow.
+
+The hook never returns ``allow``. A model-provided ``user_approved`` flag never
+bypasses the host permission surface.
 """
 
 from __future__ import annotations
@@ -52,13 +54,11 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\\\Windows\\\\System32)", re.I),
 ]
 
-# A command containing chaining, redirection, command/array substitution, or a
-# dynamic invocation operator is not eligible for the narrow read-only allow
-# list. Regexes are not a shell parser; uncertainty returns to host permission.
+# Dynamic constructs are not assumed read-only even when the first token is a
+# familiar inspection command. The gate is conservative, but normal host
+# permissions remain the authority for non-forbidden execution.
 DYNAMIC_SHELL = re.compile(r"(;|\r|\n|&&|\|\||\||>|<|\$\(|@\(|`|(?<!&)&(?!&))")
 
-# Claude Code scopes MCP tools from a plugin-bundled server. Keep the bare
-# server prefix as well for direct/local MCP execution and tests.
 MCP_PREFIXES = (
     "mcp__windows-dev-agent__",
     "mcp__plugin_windows-dev-agent_windows-dev-agent__",
@@ -144,24 +144,24 @@ def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
     return "approval-required"
 
 
-def _decision(safety_class: str) -> tuple[str, str]:
-    if safety_class == "read-only":
-        return "allow", "Windows Dev Agent proved this action read-only."
-    if safety_class in {"reversible", "approval-required", "checkpoint"}:
-        return "ask", f"Windows Dev Agent requires the ordinary host permission decision for this {safety_class} action."
-    return "deny", "Windows Dev Agent blocked a forbidden action. Change the task boundary explicitly before retrying."
+def _permission_decision(safety_class: str) -> tuple[Optional[str], str]:
+    if safety_class == "forbidden":
+        return "deny", "Windows Dev Agent blocked a forbidden action. Change the task boundary explicitly before retrying."
+    if safety_class in {"approval-required", "checkpoint"}:
+        return "ask", f"Windows Dev Agent requires explicit host confirmation for this {safety_class} action."
+    return None, f"Windows Dev Agent classified this action as {safety_class} and deferred to Claude Code's normal permission flow."
 
 
 def evaluate_hook_event(
     event: dict[str, Any], *, log_file: Optional[Path] = None
-) -> dict[str, Any]:
+) -> Optional[dict[str, Any]]:
     tool_name = str(event.get("tool_name", ""))
     tool_input = event.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
 
     safety_class = classify_tool_call(tool_name, tool_input)
-    decision, reason = _decision(safety_class)
+    decision, reason = _permission_decision(safety_class)
     try:
         append_event(
             {
@@ -172,12 +172,15 @@ def evaluate_hook_event(
                 "tool_name": tool_name,
                 "tool_use_id": event.get("tool_use_id"),
                 "safety_class": safety_class,
-                "permission_decision": decision,
+                "permission_decision": decision or "host-default",
             },
             log_file,
         )
     except Exception:
         pass
+
+    if decision is None:
+        return None
 
     return {
         "hookSpecificOutput": {
@@ -207,14 +210,12 @@ def main() -> int:
         print(json.dumps(output))
         return 0
 
-    print(
-        json.dumps(
-            evaluate_hook_event(
-                event,
-                log_file=resolve_log_file(args.data_dir),
-            )
-        )
+    output = evaluate_hook_event(
+        event,
+        log_file=resolve_log_file(args.data_dir),
     )
+    if output is not None:
+        print(json.dumps(output))
     return 0
 
 
