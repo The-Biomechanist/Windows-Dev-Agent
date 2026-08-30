@@ -1,15 +1,12 @@
 """Claude Code PreToolUse safety gate.
 
-Command hooks receive the complete hook event as JSON on stdin. This module
-classifies the requested tool call and returns Claude Code's structured
-``permissionDecision`` output:
+The gate classifies the effective requested action and returns Claude Code's
+structured permission decision. Only actions proven read-only are auto-allowed.
+Reversible/project-code execution, approval-required actions, and uncertain
+compound commands ask the human. Forbidden actions are denied.
 
-- read-only / reversible -> allow
-- approval-required / checkpoint -> ask the human
-- forbidden -> deny
-
-This is deliberately host-enforced. A model-provided ``user_approved`` flag is
-not sufficient to skip the permission dialog.
+A model-provided ``user_approved`` flag never bypasses the host permission
+surface.
 """
 
 from __future__ import annotations
@@ -22,8 +19,6 @@ import re
 import sys
 from typing import Any, Optional
 
-# Hook scripts are invoked by absolute path from an installed plugin cache. Put
-# the plugin root on sys.path before importing sibling runtime modules.
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -32,10 +27,13 @@ from src.capabilities import CapabilityConfigError, load_capabilities
 from src.observability.trace import append_event, resolve_log_file
 
 READ_ONLY_PATTERNS = [
-    re.compile(r"^\s*(git\s+(status|log|diff|show)|Get-[\w-]+|Test-Path|Resolve-Path|where(\.exe)?\b)", re.I),
-    re.compile(r"^\s*(python|py|node|npm|git|gh|dotnet|cargo|rustc|go|java)\s+--?version\b", re.I),
+    re.compile(r"^\s*(git\s+(status|log|diff|show)(\s|$)|Get-[\w-]+(\s|$)|Test-Path(\s|$)|Resolve-Path(\s|$)|where(\.exe)?\b)", re.I),
+    re.compile(r"^\s*(python|py|node|npm|git|gh|dotnet|cargo|rustc|go|java|winget|choco|scoop)\s+--?version\b", re.I),
 ]
 
+# These commands are commonly reversible, but they can execute project-owned
+# code or build hooks. They therefore keep their semantic class while returning
+# to Claude Code's ordinary human permission path instead of being auto-allowed.
 REVERSIBLE_PATTERNS = [
     re.compile(r"^\s*(pytest|ruff\b|pylint\b|eslint\b|dprint\s+check\b)", re.I),
     re.compile(r"^\s*(cargo|go|dotnet)\s+test\b", re.I),
@@ -47,7 +45,7 @@ APPROVAL_PATTERNS = [
     re.compile(r"\b(pip|uv|npm|pnpm|yarn|cargo)\s+(install|add|remove|uninstall|update|upgrade)\b", re.I),
     re.compile(r"\bgit\s+(push|commit|merge|rebase|reset|clean)\b", re.I),
     re.compile(r"\bgh\s+(pr\s+create|pr\s+merge|release\s+create)\b", re.I),
-    re.compile(r"\b(reg\s+(add|delete)|Set-ItemProperty\b|Remove-Item\b|Enable-WindowsOptionalFeature\b|Disable-WindowsOptionalFeature\b)", re.I),
+    re.compile(r"\b(reg\s+(add|delete)|Set-Item(Property)?\b|New-Item(Property)?\b|Remove-Item\b|Enable-WindowsOptionalFeature\b|Disable-WindowsOptionalFeature\b)", re.I),
     re.compile(r"\b(rm|del|erase|rmdir)\b", re.I),
 ]
 
@@ -56,20 +54,22 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\\\Windows\\\\System32)", re.I),
 ]
 
+# A command that chains/pipes multiple operations is not eligible for the
+# narrow prefix allow-list. The gate does not attempt to prove every child
+# command read-only with regexes; it asks instead.
+COMPOUND_COMMAND = re.compile(r"(;|\r|\n|&&|\|\||\|)")
 
-def classify_bash(command: str) -> str:
-    """Classify a shell command conservatively.
 
-    Unknown commands ask rather than silently running. This sacrifices a small
-    amount of autonomy to prevent a missed regex from becoming an implicit
-    mutation permission.
-    """
+def classify_shell(command: str) -> str:
+    """Classify one Bash or PowerShell command conservatively."""
     for pattern in FORBIDDEN_PATTERNS:
         if pattern.search(command):
             return "forbidden"
     for pattern in APPROVAL_PATTERNS:
         if pattern.search(command):
             return "approval-required"
+    if COMPOUND_COMMAND.search(command):
+        return "approval-required"
     for pattern in READ_ONLY_PATTERNS:
         if pattern.search(command):
             return "read-only"
@@ -79,24 +79,46 @@ def classify_bash(command: str) -> str:
     return "approval-required"
 
 
-def _capability_safety(capability_id: str) -> str:
+def classify_bash(command: str) -> str:
+    """Backward-compatible wrapper used by tests and callers."""
+    return classify_shell(command)
+
+
+def _capability_safety(capability_id: str, extra_args: Any = None) -> str:
     try:
         capability = load_capabilities().get(capability_id)
     except CapabilityConfigError:
         return "approval-required"
-    return capability.safety if capability else "approval-required"
+    if capability is None:
+        return "approval-required"
+    if capability.forbidden:
+        return "forbidden"
+
+    # Appended arguments change the effective action. Do not inherit an
+    # auto-allowable base classification across that semantic boundary.
+    if isinstance(extra_args, list) and extra_args:
+        return "approval-required"
+    return capability.safety
 
 
 def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
-    if tool_name == "Bash":
-        return classify_bash(str(tool_input.get("command", "")))
+    if tool_name in {"Bash", "PowerShell"}:
+        return classify_shell(str(tool_input.get("command", "")))
 
     prefix = "mcp__windows-dev-agent__"
     if not tool_name.startswith(prefix):
         return "approval-required"
 
     short_name = tool_name[len(prefix):]
-    if short_name in {"env_inspect", "tool_discover", "workflow_plan", "logs_query", "mcp_audit", "ecosystem_scan"}:
+    if short_name in {
+        "env_inspect",
+        "tool_discover",
+        "workflow_plan",
+        "package_search",
+        "logs_query",
+        "mcp_audit",
+        "ecosystem_scan",
+    }:
         return "read-only"
 
     execute = bool(tool_input.get("execute", False))
@@ -106,16 +128,19 @@ def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
     if short_name == "capability_run":
         if not execute:
             return "read-only"
-        return _capability_safety(str(tool_input.get("capability", "")))
+        return _capability_safety(
+            str(tool_input.get("capability", "")),
+            tool_input.get("extra_args"),
+        )
 
     return "approval-required"
 
 
 def _decision(safety_class: str) -> tuple[str, str]:
-    if safety_class in {"read-only", "reversible"}:
-        return "allow", f"Windows Dev Agent classified this action as {safety_class}."
-    if safety_class in {"approval-required", "checkpoint"}:
-        return "ask", f"Windows Dev Agent requires your confirmation for this {safety_class} action."
+    if safety_class == "read-only":
+        return "allow", "Windows Dev Agent proved this action read-only."
+    if safety_class in {"reversible", "approval-required", "checkpoint"}:
+        return "ask", f"Windows Dev Agent requires the ordinary host permission decision for this {safety_class} action."
     return "deny", "Windows Dev Agent blocked a forbidden action. Change the task boundary explicitly before retrying."
 
 
@@ -144,7 +169,6 @@ def evaluate_hook_event(
             log_file,
         )
     except Exception:
-        # Audit logging is secondary to the permission decision itself.
         pass
 
     return {
