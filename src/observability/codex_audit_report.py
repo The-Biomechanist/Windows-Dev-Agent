@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import sys
 from typing import Any, Optional
 
-try:
-    from .audit_report import load_events, summarize
-    from .trace import resolve_log_file
-except ImportError:
-    from audit_report import load_events, summarize
-    from trace import resolve_log_file
+ROOT = Path(__file__).resolve().parent.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.observability.audit_report import load_events, summarize
+from src.observability.trace import resolve_log_file
+from src.runtime_paths import resolve_codex_data_dir
 
 
 def _session_id(payload: dict[str, Any]) -> Optional[str]:
@@ -36,10 +38,12 @@ def main() -> int:
     if not session_id:
         return 0
 
-    events = load_events(
-        resolve_log_file(args.data_dir),
-        session_id=session_id,
+    log_file = (
+        resolve_log_file(args.data_dir)
+        if args.data_dir
+        else resolve_log_file(str(resolve_codex_data_dir()))
     )
+    events = load_events(log_file, session_id=session_id)
     if not events:
         return 0
 
