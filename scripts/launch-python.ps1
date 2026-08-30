@@ -12,19 +12,18 @@ $ErrorActionPreference = 'Stop'
 $MinimumPython = [Version]'3.11'
 $PluginRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $Candidates = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$ExplicitOverridePresent = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_DEV_AGENT_PYTHON)
 
 function Test-FullyQualifiedWindowsPath {
     param([string]$Path)
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
 
-    # Windows PowerShell 5.1 runs on .NET Framework, which does not expose
-    # Path.IsPathFullyQualified. Accept only drive-absolute, UNC, or extended
-    # Windows paths; reject drive-relative (C:foo) and rooted-relative (\foo).
-    if ($Path -match '^[A-Za-z]:[\\/]') { return $true }
-    if ($Path -match '^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$)') { return $true }
-    if ($Path -match '^\\\\\?\\[A-Za-z]:\\') { return $true }
-    if ($Path -match '^\\\\\?\\UNC\\[^\\]+\\[^\\]+(?:\\|$)') { return $true }
-    return $false
+    # Windows PowerShell 5.1 runs on .NET Framework, so use the older rooted-path
+    # primitive and explicitly reject drive-relative and rooted-relative forms.
+    if (-not [IO.Path]::IsPathRooted($Path)) { return $false }
+    if ($Path -match '^[A-Za-z]:($|[^\\/])') { return $false }
+    if ($Path -match '^[\\/](?![\\/])') { return $false }
+    return $true
 }
 
 function Add-PythonCandidate {
@@ -43,12 +42,16 @@ function Add-PythonCandidate {
 
 # A host may supply one already-resolved interpreter identity. Relative values are
 # rejected so this cannot reintroduce current-directory or PATH shadowing.
-if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_DEV_AGENT_PYTHON)) {
+if ($ExplicitOverridePresent) {
     if (-not (Test-FullyQualifiedWindowsPath $env:WINDOWS_DEV_AGENT_PYTHON)) {
         [Console]::Error.WriteLine('WINDOWS_DEV_AGENT_PYTHON must be an absolute python.exe path.')
         exit 70
     }
     Add-PythonCandidate $env:WINDOWS_DEV_AGENT_PYTHON
+    if ($Candidates.Count -eq 0) {
+        [Console]::Error.WriteLine('WINDOWS_DEV_AGENT_PYTHON did not identify an existing python.exe file.')
+        exit 70
+    }
 }
 
 # Prefer installation authorities that do not search the current project or PATH.
@@ -92,7 +95,7 @@ foreach ($Parent in $InstallParents) {
 $Usable = @()
 foreach ($Candidate in $Candidates) {
     try {
-        $VersionText = & $Candidate -I -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")' 2>$null
+        $VersionText = & $Candidate -I -c 'import sys; print(*sys.version_info[:3], sep=chr(46))' 2>$null
         if ($LASTEXITCODE -ne 0 -or -not $VersionText) { continue }
         $Version = [Version]([string]$VersionText).Trim()
         if ($Version -lt $MinimumPython) { continue }
@@ -104,7 +107,11 @@ foreach ($Candidate in $Candidates) {
 
 $Selected = $Usable | Sort-Object Version -Descending | Select-Object -First 1
 if (-not $Selected) {
-    [Console]::Error.WriteLine('Windows Dev Agent requires a host Python 3.11 or newer. No supported interpreter was found in the explicit host override, registered Python installations, or standard Windows installation locations.')
+    if ($ExplicitOverridePresent) {
+        [Console]::Error.WriteLine('WINDOWS_DEV_AGENT_PYTHON exists but is not a usable Python 3.11 or newer interpreter.')
+    } else {
+        [Console]::Error.WriteLine('Windows Dev Agent requires a host Python 3.11 or newer. No supported interpreter was found in registered Python installations or standard Windows installation locations.')
+    }
     exit 70
 }
 
