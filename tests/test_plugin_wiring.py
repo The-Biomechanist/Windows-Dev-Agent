@@ -102,6 +102,30 @@ def test_safety_hook_runs_by_absolute_path_for_installed_scoped_tool(tmp_path: P
     assert not (ROOT / "agent.log").exists()
 
 
+def test_read_only_hook_script_emits_no_permission_decision(tmp_path: Path):
+    gate = ROOT / "src" / "safety" / "gate.py"
+    data_dir = tmp_path / "plugin-data"
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    event = {
+        "hook_event_name": "PreToolUse",
+        "session_id": "session-a",
+        "tool_name": "PowerShell",
+        "tool_input": {"command": "Get-ChildItem C:\\src"},
+    }
+    result = subprocess.run(
+        [sys.executable, str(gate), "--data-dir", str(data_dir)],
+        input=json.dumps(event),
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""
+
+
 def test_audit_report_filters_to_stop_hook_session(tmp_path: Path):
     data_dir = tmp_path / "plugin-data"
     data_dir.mkdir()
@@ -130,5 +154,6 @@ def test_audit_report_filters_to_stop_hook_session(tmp_path: Path):
     assert report.returncode == 0, report.stderr
     assert "Session Audit" in report.stdout
     assert "Events: 1" in report.stdout
-    assert "Failures: 0" in report.stdout
+    assert "Execution failures: 0" in report.stdout
+    assert "Permission denials: 0" in report.stdout
     assert "package_install" not in report.stdout
