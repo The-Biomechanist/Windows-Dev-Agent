@@ -36,6 +36,17 @@ def test_compound_command_cannot_inherit_read_only_prefix():
     assert gate.classify_shell("Get-ChildItem | Set-Content out.txt") == "approval-required"
 
 
+def test_redirection_cannot_inherit_read_only_prefix():
+    assert gate.classify_shell("git status --short > status.txt") == "approval-required"
+    assert gate.classify_shell("Get-ChildItem > listing.txt") == "approval-required"
+
+
+def test_dynamic_substitution_cannot_inherit_read_only_prefix():
+    assert gate.classify_shell("git status $(touch changed.txt)") == "approval-required"
+    assert gate.classify_shell("Get-ChildItem $(Invoke-Expression 'Write-Output x')") == "approval-required"
+    assert gate.classify_shell("Get-ChildItem & some-command") == "approval-required"
+
+
 def test_reversible_project_code_returns_to_host_permission_path():
     assert gate.classify_shell("pytest") == "reversible"
     assert _decision("Bash", {"command": "pytest"}) == "ask"
