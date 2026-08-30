@@ -346,7 +346,14 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
                 "available_tool": tool.name if tool else None,
             }
         )
-    selected = candidates[0] if candidates and candidates[0]["score"] > 0 else None
+    selected = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate["score"] > 0 and candidate["available_tool"] is not None
+        ),
+        None,
+    )
     phases = [
         {
             "phase": "inspect",
@@ -427,7 +434,16 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
     if not _PACKAGE_ID.fullmatch(package_id):
         return {"status": "invalid_input", "error": "package_id contains unsupported characters"}
     commands = {
-        "winget": ["winget", "install", "--id", package_id, "--exact", "--accept-package-agreements", "--accept-source-agreements"],
+        "winget": [
+            "winget",
+            "install",
+            "--id",
+            package_id,
+            "--exact",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+            "--disable-interactivity",
+        ],
         "chocolatey": ["choco", "install", package_id, "-y"],
         "scoop": ["scoop", "install", package_id],
     }
@@ -521,7 +537,6 @@ def _payload_sources(workspace: Path, value: Any) -> tuple[Optional[list[tuple[P
         candidates = (candidate for candidate in ([source] if not source.is_dir() else [source]))
         if source.is_dir():
             candidates = iter((source, *()))
-            # Chain lazily without materializing the directory tree.
             from itertools import chain
             candidates = chain((source,), source.rglob("*"))
 
