@@ -63,7 +63,7 @@ def evaluate_permission_request(event: dict[str, Any], *, log_file: Optional[Pat
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": "PermissionRequest",
                 "success": None,
-                "execution_outcome": "not_executed",
+                "execution_outcome": "not_applicable",
                 "permission_denied": behavior == "deny",
                 "session_id": event.get("session_id"),
                 "tool_name": tool_name,
