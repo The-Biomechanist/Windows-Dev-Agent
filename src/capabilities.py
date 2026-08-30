@@ -9,11 +9,14 @@ Host permission is deliberately not represented as a model-supplied field. An
 MCP client requests execution with ``execute=true``; Claude Code or Codex then
 owns any human approval prompt around that exact call. The runtime still blocks
 forbidden capabilities and preserves the effective safety class in its result.
+Plan fingerprints bind reviewed execution state; they are freshness evidence,
+not approval evidence.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -135,17 +138,30 @@ def load_capabilities(path: Optional[Path] = None) -> dict[str, Capability]:
     return capabilities
 
 
+def resolve_available_tool(capability: Capability) -> Optional[tuple[CapabilityTool, str]]:
+    """Return the first configured tool and the exact executable it resolves to."""
+    for tool in capability.tools:
+        executable = shutil.which(tool.executable)
+        if executable:
+            return tool, str(Path(executable).resolve())
+    return None
+
+
 def select_available_tool(capability: Capability) -> Optional[CapabilityTool]:
     """Return the first configured tool whose executable is currently present."""
-    for tool in capability.tools:
-        if shutil.which(tool.executable):
-            return tool
-    return None
+    resolved = resolve_available_tool(capability)
+    return resolved[0] if resolved else None
 
 
 def command_display(argv: Iterable[str]) -> str:
     """Render an argv vector for human review without changing execution semantics."""
     return subprocess.list2cmdline(list(argv))
+
+
+def fingerprint_plan(fields: Mapping[str, Any]) -> str:
+    """Return a deterministic, non-authoritative fingerprint of reviewed plan state."""
+    encoded = json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def effective_safety(capability: Capability, extra_args: list[str]) -> str:
@@ -165,13 +181,16 @@ def run_capability(
     cwd: Optional[str] = None,
     timeout_seconds: int = 120,
     path: Optional[Path] = None,
+    plan_fingerprint: Optional[str] = None,
 ) -> dict[str, Any]:
     """Plan or execute a configured capability.
 
     ``execute=true`` means the MCP client is requesting the concrete action.
     The active host owns any human approval prompt for that same tool call. The
     runtime independently blocks forbidden capabilities and never infers host
-    approval from a model-controlled boolean.
+    approval from a model-controlled boolean. Execution additionally requires
+    the fingerprint returned by a fresh plan so changed executable/route state
+    cannot be silently substituted after review.
     """
     capabilities = load_capabilities(path)
     capability = capabilities.get(capability_id)
@@ -180,24 +199,43 @@ def run_capability(
             "status": "unknown_capability",
             "capability": capability_id,
             "available": sorted(capabilities),
+            "execution_started": False,
         }
 
-    tool = select_available_tool(capability)
-    if tool is None:
+    resolved = resolve_available_tool(capability)
+    if resolved is None:
         return {
             "status": "unavailable",
             "capability": capability.id,
             "description": capability.description,
             "safety_class": capability.safety,
             "checked_tools": [tool.name for tool in capability.tools],
+            "execution_started": False,
         }
+    tool, executable = resolved
 
     extra_args = extra_args or []
     if not isinstance(extra_args, list) or not all(isinstance(arg, str) and arg for arg in extra_args):
-        return {"status": "invalid_input", "error": "extra_args must be a list of non-empty strings"}
+        return {"status": "invalid_input", "error": "extra_args must be a list of non-empty strings", "execution_started": False}
+
+    run_cwd: Optional[Path] = None
+    if cwd:
+        run_cwd = Path(cwd).expanduser().resolve()
+        if not run_cwd.is_dir():
+            return {"status": "invalid_input", "error": f"cwd is not a directory: {run_cwd}", "execution_started": False}
 
     safety_class = effective_safety(capability, extra_args)
-    argv = [*tool.argv, *extra_args]
+    argv = [executable, *tool.argv[1:], *extra_args]
+    plan_fields: dict[str, Any] = {
+        "capability": capability.id,
+        "tool": tool.name,
+        "resolved_executable": executable,
+        "argv": argv,
+        "cwd": str(run_cwd) if run_cwd else None,
+        "base_safety_class": capability.safety,
+        "safety_class": safety_class,
+    }
+    current_fingerprint = fingerprint_plan(plan_fields)
     plan: dict[str, Any] = {
         "status": "planned",
         "capability": capability.id,
@@ -205,21 +243,33 @@ def run_capability(
         "base_safety_class": capability.safety,
         "safety_class": safety_class,
         "tool": tool.name,
+        "resolved_executable": executable,
         "argv": argv,
         "command": command_display(argv),
+        "cwd": str(run_cwd) if run_cwd else None,
+        "plan_fingerprint": current_fingerprint,
         "requires_host_approval": safety_class in {"reversible", "approval-required"},
     }
 
     if not execute:
         return plan
     if safety_class == "forbidden":
-        return {**plan, "status": "blocked", "error": "Capability is forbidden"}
-
-    run_cwd: Optional[Path] = None
-    if cwd:
-        run_cwd = Path(cwd).expanduser().resolve()
-        if not run_cwd.is_dir():
-            return {**plan, "status": "invalid_input", "error": f"cwd is not a directory: {run_cwd}"}
+        return {**plan, "status": "blocked", "error": "Capability is forbidden", "execution_started": False}
+    if not isinstance(plan_fingerprint, str) or not plan_fingerprint:
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "execute=true requires plan_fingerprint from a fresh reviewed plan",
+            "execution_started": False,
+        }
+    if plan_fingerprint != current_fingerprint:
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "Capability plan state changed; obtain and review a fresh plan before execution",
+            "submitted_plan_fingerprint": plan_fingerprint,
+            "execution_started": False,
+        }
 
     try:
         result = subprocess.run(
