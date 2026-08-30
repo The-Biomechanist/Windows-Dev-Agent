@@ -43,6 +43,23 @@ def test_session_filter_never_launders_other_session_events(tmp_path: Path):
     assert audit_report.summarize(events)["failures"] == 0
 
 
+def test_permission_denial_is_not_counted_as_execution_failure():
+    summary = audit_report.summarize(
+        [
+            {
+                "event": "PreToolUse",
+                "success": None,
+                "permission_denied": True,
+                "permission_decision": "deny",
+                "tool_name": "PowerShell",
+            }
+        ]
+    )
+    assert summary["failures"] == 0
+    assert summary["permission_denials"] == 1
+    assert summary["last_denied_tool"] == "PowerShell"
+
+
 def test_unfiltered_audit_is_explicitly_history_surface(tmp_path: Path):
     log = tmp_path / "agent.log"
     log.write_text(json.dumps({"session_id": "a", "event": "PostToolUse", "success": True}) + "\n", encoding="utf-8")
