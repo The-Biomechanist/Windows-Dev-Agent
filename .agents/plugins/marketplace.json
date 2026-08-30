@@ -1,0 +1,20 @@
+{
+  "name": "windows-dev-agent",
+  "interface": {
+    "displayName": "Windows Dev Agent"
+  },
+  "plugins": [
+    {
+      "name": "windows-dev-agent",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
