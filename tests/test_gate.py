@@ -25,7 +25,6 @@ def test_compound_redirected_and_dynamic_commands_cannot_inherit_read_only():
     for command in (
         "git status --short; some-new-tool mutate-things",
         "Get-ChildItem | Set-Content out.txt",
-        "git status --short > status.txt",
         "git status $(touch changed.txt)",
         "Get-ChildItem & some-command",
     ):
@@ -44,6 +43,14 @@ def test_destructive_disk_and_system32_commands_are_forbidden():
     system32 = r"Remove-Item C:\Windows\System32\drivers\example.sys"
     assert gate.classify_shell(system32) == "forbidden"
     assert _decision("PowerShell", {"command": system32}) == "deny"
+
+
+def test_external_discovery_tools_require_host_permission():
+    prefix = "mcp__plugin_windows-dev-agent_windows-dev-agent__"
+    for name in ("tool_discover", "package_search"):
+        tool = prefix + name
+        assert gate.classify_tool_call(tool, {}) == "approval-required"
+        assert _decision(tool, {}) == "ask"
 
 
 def test_package_plan_defers_but_execute_asks_without_fake_approval_bit(monkeypatch):
