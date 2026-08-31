@@ -21,9 +21,12 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
       - name: Apply native authority transforms
+        shell: pwsh
         run: |
           python .github/apply_native_discovery_authority.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python .github/apply_native_discovery_docs.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify source shape and compile
         shell: pwsh
         run: |
