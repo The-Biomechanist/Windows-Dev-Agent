@@ -45,6 +45,7 @@ from src.file_guard import (
     valid_executable_identity,
 )
 from src.observability.trace import history_log_files
+from src.windows_metadata import windows_file_version
 from src.windows_state import query_wsl_route_state
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,7 @@ TOOLS = [
     },
     {
         "name": "tool_discover",
-        "description": "Discover common runtimes, editors, package managers, and version-control tools by resolving exact executables and running bounded version probes. External execution remains host-controlled.",
+        "description": "Discover common runtimes, editors, package managers, and version-control tools by resolving exact executables and using tool-specific self-report commands or Windows file-version metadata. Command probes remain host-controlled external execution.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -342,32 +343,71 @@ async def handle_env_inspect(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_TOOL_DISCOVERY_PROBES: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
+    "runtimes": {
+        "python": ("command", ("--version",)),
+        "py": ("command", ("--version",)),
+        "node": ("command", ("--version",)),
+        "cargo": ("command", ("--version",)),
+        "go": ("command", ("version",)),
+        "dotnet": ("command", ("--version",)),
+        "java": ("command", ("-version",)),
+    },
+    "editors": {
+        "code": ("command", ("--version",)),
+        "devenv": ("windows_file_version", ()),
+        "rider": ("windows_file_version", ()),
+        "pycharm": ("windows_file_version", ()),
+    },
+    "package_managers": {
+        "winget": ("command", ("--version",)),
+        "choco": ("command", ("--version",)),
+        "scoop": ("command", ("--version",)),
+        "pip": ("command", ("--version",)),
+        "uv": ("command", ("--version",)),
+        "npm": ("command", ("--version",)),
+    },
+    "vcs": {
+        "git": ("command", ("--version",)),
+        "gh": ("command", ("--version",)),
+        "git-lfs": ("command", ("version",)),
+    },
+}
+
+
+def _discover_tool_version(path: str, source: str, version_argv: tuple[str, ...]) -> tuple[Optional[str], bool]:
+    if source == "windows_file_version":
+        return windows_file_version(path), False
+    probe = run_bounded([path, *version_argv], timeout=5)
+    lines = (probe.get("stdout") or probe.get("stderr") or "").strip().splitlines()
+    version = lines[0] if probe.get("succeeded") and lines else None
+    return version, probe.get("execution_started") is True
+
+
 async def handle_tool_discover(args: dict[str, Any]) -> dict[str, Any]:
-    candidates = {
-        "runtimes": ["python", "py", "node", "cargo", "go", "dotnet", "java"],
-        "editors": ["code", "devenv", "rider", "pycharm"],
-        "package_managers": ["winget", "choco", "scoop", "pip", "uv", "npm"],
-        "vcs": ["git", "gh", "git-lfs"],
-    }
     category = args.get("category", "all")
-    scan = candidates if category == "all" else {category: candidates.get(str(category), [])}
+    scan = (
+        _TOOL_DISCOVERY_PROBES
+        if category == "all"
+        else {str(category): _TOOL_DISCOVERY_PROBES.get(str(category), {})}
+    )
     output: dict[str, Any] = {}
     execution_started = False
     for group, commands in scan.items():
         output[group] = {}
-        for command in commands:
+        for command, (version_source, version_argv) in commands.items():
             path = resolve_executable(command)
             if not path:
                 output[group][command] = {"available": False, "version": None}
                 continue
-            probe = run_bounded([path, "--version"], timeout=5)
-            execution_started = execution_started or probe.get("execution_started") is True
-            lines = (probe.get("stdout") or probe.get("stderr") or "").strip().splitlines()
+            version, started = _discover_tool_version(path, version_source, version_argv)
+            execution_started = execution_started or started
             output[group][command] = {
                 "available": True,
                 "path": path,
-                "version": lines[0] if probe.get("succeeded") and lines else None,
-                "version_status": "known" if probe.get("succeeded") and lines else "unknown",
+                "version": version,
+                "version_status": "known" if version else "unknown",
+                "version_source": version_source,
             }
     output["execution_started"] = execution_started
     return output
