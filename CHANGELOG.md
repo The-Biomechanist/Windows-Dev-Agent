@@ -38,7 +38,7 @@ Production-hardening and public-release cleanup.
 - Revalidate Windows Sandbox payload paths, entry/byte budgets, and opened file/directory identities while staging so a post-validation junction/symlink swap cannot redirect WDA-owned copies.
 - Replace Dev Drive volume-label inference with the native `FSCTL_QUERY_PERSISTENT_VOLUME_STATE` / `PERSISTENT_VOLUME_STATE_DEV_VOLUME` filesystem identity and preserve whether the inventory was actually established.
 - Make discovery failures return the canonical snapshot shape.
-- Add bounded atomic discovery cache writes, a Windows interprocess cache lock, and mutation-generation protection against stale cache resurrection.
+- Add bounded atomic discovery cache writes, a Windows interprocess cache lock, and mutation-generation protection against stale cache resurrection. Cache admission/publication now fails closed when generation authority is unreadable or malformed instead of letting sentinel text behave like a matching generation token; a missing generation file remains the valid first-run baseline.
 - Fail package-install execution closed when the cache mutation/invalidation transition cannot be established before launch.
 - Serialize audit rotation/append between Windows hook processes.
 - Make session/persistent audit summaries best-effort across retained log segments: a rotated predecessor that disappears or becomes unreadable after enumeration is skipped while remaining readable evidence is preserved, so Stop-time reporting does not become an execution blocker.

@@ -123,16 +123,25 @@ class EnvironmentDiscovery:
 
     def discover(self, force_refresh: bool = False) -> EnvironmentSnapshot:
         self.last_execution_started = False
-        expected_generation = ""
+        expected_generation: Optional[str] = None
         cache_usable = self.cache_enabled
         if self.cache_enabled:
             try:
                 with _cache_lock(self.cache_dir):
-                    if not force_refresh:
+                    # Generation authority must be established before an existing
+                    # snapshot can be admitted. A missing file is the valid initial
+                    # generation; unreadable/malformed material disables cache use.
+                    expected_generation = self._generation()
+                    if expected_generation is None:
+                        cache_usable = False
+                        logger.warning(
+                            "Environment cache generation could not be established; "
+                            "bypassing cached state for this discovery"
+                        )
+                    elif not force_refresh:
                         cached = self._load_cache()
                         if cached is not None:
                             return cached
-                    expected_generation = self._generation()
             except (OSError, TimeoutError) as exc:
                 logger.warning("Environment cache unavailable for this discovery: %s", exc)
                 cache_usable = False
@@ -142,7 +151,7 @@ class EnvironmentDiscovery:
         except DiscoveryError as exc:
             snapshot = self._fallback_discovery(str(exc))
 
-        if cache_usable:
+        if cache_usable and expected_generation is not None:
             try:
                 with _cache_lock(self.cache_dir):
                     self._save_cache(snapshot, expected_generation=expected_generation)
@@ -224,16 +233,25 @@ class EnvironmentDiscovery:
             ),
         )
 
-    def _generation(self) -> str:
+    def _generation(self) -> Optional[str]:
+        """Return the established generation token, initial baseline, or unknown."""
         try:
             raw = self.generation_file.read_bytes()
         except FileNotFoundError:
+            # No generation file is the valid pre-mutation baseline. An existing
+            # empty or malformed file is not equivalent to that baseline.
             return ""
         except OSError:
-            return "unknown"
-        if len(raw) > 256:
-            return "invalid"
-        return raw.decode("ascii", errors="replace")
+            return None
+        if len(raw) != 32:
+            return None
+        try:
+            value = raw.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+        if any(ch not in "0123456789abcdef" for ch in value):
+            return None
+        return value
 
     def _load_cache(self) -> Optional[EnvironmentSnapshot]:
         if not self.cache_file.exists():
@@ -256,7 +274,8 @@ class EnvironmentDiscovery:
 
     def _save_cache(self, snapshot: EnvironmentSnapshot, *, expected_generation: str) -> None:
         try:
-            if self._generation() != expected_generation:
+            current_generation = self._generation()
+            if current_generation is None or current_generation != expected_generation:
                 return
             payload = json.dumps(snapshot.to_dict(), separators=(",", ":"))
             if len(payload.encode("utf-8")) > MAX_CACHE_BYTES:
@@ -274,11 +293,13 @@ class EnvironmentDiscovery:
                     handle.write(payload)
                     handle.flush()
                     os.fsync(handle.fileno())
-                if self._generation() != expected_generation:
+                current_generation = self._generation()
+                if current_generation is None or current_generation != expected_generation:
                     temp_path.unlink(missing_ok=True)
                     return
                 os.replace(temp_path, self.cache_file)
-                if self._generation() != expected_generation:
+                current_generation = self._generation()
+                if current_generation is None or current_generation != expected_generation:
                     self.cache_file.unlink(missing_ok=True)
             except Exception:
                 temp_path.unlink(missing_ok=True)
