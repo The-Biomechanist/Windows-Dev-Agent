@@ -26,13 +26,60 @@ function Add-DiscoveryError {
     $script:discoveryResult.errors += $Message
 }
 
+function Get-WdaApplicationSearchPath {
+    # WDA intentionally does not grant executable authority to the process cwd,
+    # empty PATH entries, or relative PATH entries. PowerShell remains the
+    # command-resolution authority after that explicit policy is applied.
+    try {
+        $current = [IO.Path]::GetFullPath([Environment]::CurrentDirectory).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar,
+            [IO.Path]::AltDirectorySeparatorChar
+        )
+        $safe = @()
+        $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($raw in ($env:PATH -split [IO.Path]::PathSeparator)) {
+            $entry = [string]$raw
+            if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+            $entry = [Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"'))
+            if (-not [IO.Path]::IsPathRooted($entry)) { continue }
+            try {
+                $full = [IO.Path]::GetFullPath($entry).TrimEnd(
+                    [IO.Path]::DirectorySeparatorChar,
+                    [IO.Path]::AltDirectorySeparatorChar
+                )
+            }
+            catch {
+                continue
+            }
+            if ([StringComparer]::OrdinalIgnoreCase.Equals($full, $current)) { continue }
+            if ($seen.Add($full)) {
+                $safe += $full
+            }
+        }
+        return @{ established = $true; path = ($safe -join [IO.Path]::PathSeparator) }
+    }
+    catch {
+        Add-DiscoveryError "Executable search authority was not established: $($_.Exception.Message)"
+        return @{ established = $false; path = $null }
+    }
+}
+
+$WdaApplicationSearchPath = Get-WdaApplicationSearchPath
+
 function Test-CommandAvailable {
     param([string]$Name)
+    if ($script:WdaApplicationSearchPath.established -ne $true) { return $null }
+    $originalPath = $env:PATH
     try {
-        return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+        $env:PATH = [string]$script:WdaApplicationSearchPath.path
+        $command = Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        return $null -ne $command
     }
     catch {
         return $null
+    }
+    finally {
+        $env:PATH = $originalPath
     }
 }
 
