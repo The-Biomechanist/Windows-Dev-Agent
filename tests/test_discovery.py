@@ -77,6 +77,10 @@ def _result(*, returncode=0, stdout=None, stderr="", timed_out=False, started=Tr
         "stdout": json.dumps(MOCK_DISCOVERY_OUTPUT) if stdout is None else stdout,
         "stderr": stderr,
         "execution_started": started,
+        "output_capture_complete": started and not timed_out,
+        "output_capture_settled": started,
+        "stdout_truncated": False,
+        "stderr_truncated": False,
     }
     if timed_out:
         value["timed_out"] = True

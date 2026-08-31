@@ -29,6 +29,10 @@ def test_runtime_version_probes_use_documented_tool_argv(monkeypatch):
             "stderr": "",
             "argv": argv,
             "execution_started": True,
+            "output_capture_complete": True,
+            "output_capture_settled": True,
+            "stdout_truncated": False,
+            "stderr_truncated": False,
         }
 
     monkeypatch.setattr(server, "run_bounded", fake_run)
@@ -53,6 +57,10 @@ def test_git_lfs_uses_version_subcommand(monkeypatch):
             "stderr": "",
             "argv": argv,
             "execution_started": True,
+            "output_capture_complete": True,
+            "output_capture_settled": True,
+            "stdout_truncated": False,
+            "stderr_truncated": False,
         }
 
     monkeypatch.setattr(server, "run_bounded", fake_run)

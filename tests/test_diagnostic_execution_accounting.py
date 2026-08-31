@@ -16,6 +16,15 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def _complete_receipt_fields() -> dict[str, bool]:
+    return {
+        "output_capture_complete": True,
+        "output_capture_settled": True,
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+    }
+
+
 def test_discovery_cache_hit_does_not_claim_external_execution(tmp_path: Path, monkeypatch):
     discovery = EnvironmentDiscovery(cache_enabled=True, data_dir=tmp_path)
     cached = discovery._fallback_discovery("cached")
@@ -44,6 +53,7 @@ def test_native_discovery_records_bounded_powershell_start(tmp_path: Path, monke
             "stdout": json.dumps(payload),
             "stderr": "",
             "execution_started": True,
+            **_complete_receipt_fields(),
         },
     )
 
@@ -96,6 +106,7 @@ def test_tool_discover_reports_observed_process_start(monkeypatch):
             "stderr": "",
             "argv": argv,
             "execution_started": True,
+            **_complete_receipt_fields(),
         },
     )
 
@@ -131,6 +142,7 @@ def test_host_ecosystem_scan_reports_observed_process_start(tmp_path: Path, monk
             "stderr": "",
             "argv": argv,
             "execution_started": True,
+            **_complete_receipt_fields(),
         },
     )
 
