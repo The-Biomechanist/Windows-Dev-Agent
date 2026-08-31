@@ -1,0 +1,80 @@
+name: Probe PowerShell application discovery
+
+on:
+  push:
+    branches: [repair/0.5.0-native-application-discovery]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Probe Windows PowerShell 5.1 application resolution
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $originalPath = $env:PATH
+          $temp = Join-Path $env:RUNNER_TEMP 'wda-command-probe'
+          New-Item -ItemType Directory -Force -Path $temp | Out-Null
+          Set-Content -LiteralPath (Join-Path $temp 'wda-fake.exe') -Value 'not-an-exe' -Encoding Ascii
+          Push-Location $temp
+          try {
+            function wda-function-only { 'function' }
+            Set-Alias -Name wda-alias-only -Value Get-Date
+
+            $functionResult = Get-Command -Name wda-function-only -ErrorAction SilentlyContinue
+            $functionApplication = Get-Command -Name wda-function-only -CommandType Application -ErrorAction SilentlyContinue
+            $aliasResult = Get-Command -Name wda-alias-only -ErrorAction SilentlyContinue
+            $aliasApplication = Get-Command -Name wda-alias-only -CommandType Application -ErrorAction SilentlyContinue
+            Write-Host "function plain=$($functionResult.CommandType) application=$($null -ne $functionApplication)"
+            Write-Host "alias plain=$($aliasResult.CommandType) application=$($null -ne $aliasApplication)"
+            if ($null -ne $functionApplication -or $null -ne $aliasApplication) {
+              throw 'Application filter accepted a function or alias'
+            }
+
+            $env:PATH = ".;$temp;$originalPath"
+            $fakeWithCwdPath = Get-Command -Name wda-fake -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            Write-Host "fake with cwd/relative PATH=$($fakeWithCwdPath.Source)"
+            if ($null -eq $fakeWithCwdPath) {
+              throw 'Expected native Application lookup to see fake executable through PATH'
+            }
+
+            $current = [IO.Path]::GetFullPath([Environment]::CurrentDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+            $safe = @()
+            foreach ($raw in ($env:PATH -split [IO.Path]::PathSeparator)) {
+              $entry = [string]$raw
+              if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+              $entry = [Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"'))
+              if (-not [IO.Path]::IsPathRooted($entry)) { continue }
+              try {
+                $full = [IO.Path]::GetFullPath($entry).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+              } catch {
+                continue
+              }
+              if ([StringComparer]::OrdinalIgnoreCase.Equals($full, $current)) { continue }
+              $safe += $full
+            }
+            $env:PATH = $safe -join [IO.Path]::PathSeparator
+
+            $fakeSafe = Get-Command -Name wda-fake -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            Write-Host "fake with sanitized PATH exists=$($null -ne $fakeSafe)"
+            if ($null -ne $fakeSafe) {
+              throw "Sanitized PATH still resolved cwd fake: $($fakeSafe.Source)"
+            }
+
+            foreach ($name in @('python', 'git')) {
+              $command = Get-Command -Name $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+              Write-Host "$name application=$($command.Source) type=$($command.CommandType)"
+              if ($null -eq $command -or $command.CommandType -ne 'Application') {
+                throw "$name did not resolve as Application through sanitized PATH"
+              }
+            }
+          } finally {
+            $env:PATH = $originalPath
+            Pop-Location
+            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+          }
