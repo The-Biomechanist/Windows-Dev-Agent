@@ -6,7 +6,6 @@ from collections import deque
 import ctypes
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import threading
 from typing import Any, BinaryIO, Optional
@@ -24,8 +23,59 @@ DEFAULT_STDERR_BYTES = 4_000
 _READ_CHUNK_BYTES = 8_192
 
 
+_WINDOWS_DEFAULT_PATHEXT = (".COM", ".EXE", ".BAT", ".CMD")
+
+
+def _windows_executable_names(command: str) -> list[str]:
+    raw_extensions = os.environ.get("PATHEXT")
+    extensions = [
+        item if item.startswith(".") else "." + item
+        for item in (raw_extensions.split(os.pathsep) if raw_extensions else _WINDOWS_DEFAULT_PATHEXT)
+        if item
+    ]
+    extensions = list(dict.fromkeys(item.casefold() for item in extensions))
+    suffix = Path(command).suffix.casefold()
+    if suffix in extensions:
+        return [command]
+    return [command + extension for extension in extensions] + [command]
+
+
+def _windows_path_directories() -> list[Path]:
+    """Return absolute PATH directories without any current-directory dependency."""
+    raw_path = os.environ.get("PATH")
+    if raw_path is None:
+        raw_path = os.defpath
+    try:
+        current = Path.cwd().resolve()
+    except OSError:
+        current = Path.cwd().absolute()
+    current_key = os.path.normcase(str(current))
+    result: list[Path] = []
+    seen: set[str] = set()
+    for raw_entry in raw_path.split(os.pathsep):
+        entry = raw_entry.strip().strip('"')
+        if not entry:
+            continue
+        entry = os.path.expandvars(entry)
+        directory = Path(entry).expanduser()
+        # Relative PATH entries are necessarily cwd-dependent on Windows. They are
+        # excluded rather than silently becoming project/plugin executable authority.
+        if not directory.is_absolute():
+            continue
+        try:
+            resolved = directory.resolve()
+        except OSError:
+            continue
+        key = os.path.normcase(str(resolved))
+        if key == current_key or key in seen:
+            continue
+        seen.add(key)
+        result.append(resolved)
+    return result
+
+
 def resolve_executable(command: str) -> Optional[str]:
-    """Resolve one executable once and return the exact absolute path to execute."""
+    """Resolve one executable once without granting Windows cwd implicit search authority."""
     raw = str(command or "").strip()
     if not raw:
         return None
@@ -35,6 +85,23 @@ def resolve_executable(command: str) -> Optional[str]:
             return str(candidate.resolve()) if candidate.is_file() else None
         except OSError:
             return None
+    if os.name == "nt":
+        # Internal callers use bare executable names. Reject relative directory
+        # components (including drive-relative forms) instead of interpreting them
+        # against a host/project current directory.
+        if candidate.drive or candidate.parent != Path("."):
+            return None
+        for directory in _windows_path_directories():
+            for name in _windows_executable_names(raw):
+                path = directory / name
+                try:
+                    if path.is_file():
+                        return str(path.resolve())
+                except OSError:
+                    continue
+        return None
+
+    import shutil
     found = shutil.which(raw)
     if not found:
         return None

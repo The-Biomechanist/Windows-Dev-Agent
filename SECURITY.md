@@ -42,7 +42,7 @@ The MCP runtime validates tool arguments again at execution time. Advertised JSO
 
 ### Executable identity matters
 
-WDA resolves external executables to absolute identities and captured subprocess execution refuses an unresolved/bare executable.
+WDA resolves external executables to absolute identities and captured subprocess execution refuses an unresolved/bare executable. For ordinary Windows tool lookup, WDA does not use Python's current-directory-sensitive `shutil.which()` semantics: it enumerates absolute inherited `PATH` entries itself, excludes the process current directory plus empty/relative PATH entries, and rejects relative command paths. This prevents the active project or plugin working directory from becoming implicit executable authority merely because Windows/Python would search it first.
 
 For plan-first `capability_run`, `package_install`, and `sandbox_run`, the `execute:false` result exposes the absolute `executable` plus `executable_identity_kind` and `executable_identity_sha256`. A later `execute:true` call must echo those values through the matching `expected_*` fields. Regular executable files are fingerprinted from the exact opened file; Windows App Execution Aliases are represented separately and fingerprinted from their AppExecLink reparse data. WDA establishes the current path and typed identity again before mutation or Sandbox staging, and the launch layer holds the verified file or alias object stable through process creation. Missing identity material is invalid input; changed identity returns `stale_plan` with `execution_started:false` and requires a fresh plan.
 

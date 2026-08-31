@@ -124,6 +124,7 @@ Installer exit status is not proof that the requested development task now works
 All captured subprocess execution goes through one bounded runner. It:
 
 - requires an absolute executable path;
+- on Windows, resolves ordinary bare tool names only from absolute inherited `PATH` entries, explicitly excluding the process current directory, empty/relative PATH entries, and relative command paths before identity sealing;
 - snapshots the current typed executable identity for ordinary probes and holds that exact file or App Execution Alias object through process creation;
 - for plan-first execution, additionally requires the earlier reviewed typed identity fingerprint to match before launch;
 - disconnects child stdin from the MCP transport;

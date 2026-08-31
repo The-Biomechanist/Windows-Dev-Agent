@@ -25,6 +25,44 @@ def test_resolve_executable_returns_absolute_identity():
     assert Path(resolved).resolve() == Path(sys.executable).resolve()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows executable lookup contract is Windows-specific")
+def test_windows_resolution_excludes_implicit_and_explicit_current_directory(tmp_path: Path, monkeypatch):
+    project = tmp_path / "project"
+    tools = tmp_path / "tools"
+    project.mkdir()
+    tools.mkdir()
+    project_decoy = project / "probe.EXE"
+    trusted = tools / "probe.EXE"
+    project_decoy.write_bytes(b"project-decoy")
+    trusted.write_bytes(b"trusted-path-tool")
+
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("PATHEXT", ".EXE;.CMD")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(project), str(tools)]))
+
+    resolved = resolve_executable("probe")
+
+    assert resolved is not None
+    assert Path(resolved).resolve() == trusted.resolve()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows executable lookup contract is Windows-specific")
+def test_windows_resolution_does_not_fall_back_to_cwd_or_relative_path_entries(tmp_path: Path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "probe.EXE").write_bytes(b"project-decoy")
+    relative_tools = project / "relative-tools"
+    relative_tools.mkdir()
+    (relative_tools / "probe.EXE").write_bytes(b"relative-decoy")
+
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    monkeypatch.setenv("PATH", os.pathsep.join(["", ".", "relative-tools", str(project)]))
+
+    assert resolve_executable("probe") is None
+    assert resolve_executable(str(Path("relative-tools") / "probe")) is None
+
+
 def test_reviewed_executable_identity_requires_same_live_absolute_file(tmp_path: Path):
     executable = tmp_path / "tool.exe"
     executable.write_bytes(b"tool")

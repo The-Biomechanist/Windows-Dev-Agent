@@ -18,6 +18,7 @@ Production-hardening and public-release cleanup.
 - Consolidate captured external execution into a bounded streaming runner.
 - Bind plan-first capability/package/Sandbox execution to the reviewed executable path **and typed identity fingerprint**. Regular files use SHA-256 of the exact opened file; Windows App Execution Aliases use SHA-256 of the alias reparse data. Execution re-establishes that identity and holds the verified object stable through process creation; a changed identity returns `stale_plan` before execution, staging, or mutation and does not become a second approval token.
 - Self-seal non-plan subprocesses at use time too: diagnostic/search/inventory launches snapshot the current typed executable identity and hold that exact object through process creation, closing the absolute-path resolve-to-spawn replacement window without adding plan ceremony.
+- Remove Windows current-directory executable authority from ordinary tool resolution. Bare tool names are resolved from absolute inherited `PATH` entries with cwd/empty/relative entries excluded, avoiding Python 3.11's unconditional cwd-first `shutil.which()` behavior and the conditional cwd-first behavior in newer Python releases.
 - Resolve runtime-owned Windows control-plane binaries such as discovery PowerShell, WSL, and Windows Sandbox from trusted Windows locations rather than PATH; Claude also binds its bootstrap PowerShell to the Windows system installation.
 
 ### Isolation
