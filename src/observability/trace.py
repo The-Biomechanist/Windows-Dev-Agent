@@ -115,6 +115,9 @@ def derive_execution_outcome(payload: dict[str, Any]) -> tuple[str, Optional[str
             return "unknown", None
         return "not_applicable", None
 
+    if result.get("execution_started") is True and result.get("lifecycle_error"):
+        return "unknown", status
+
     if (
         has_execute
         and requested_execute

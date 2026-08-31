@@ -131,12 +131,13 @@ All captured subprocess execution goes through one bounded runner. It:
 - streams stdout/stderr while retaining only bounded tails in memory; receipts distinguish clean output EOF (`output_capture_complete`), reader settlement (`output_capture_settled`), and whether either retained tail discarded earlier bytes (`stdout_truncated` / `stderr_truncated`); consumers that derive facts from captured text require the relevant stream to be complete, settled, and non-truncated;
 - on Windows, cancels still-blocked synchronous drain reads after a short post-process grace period rather than returning with live reader threads; forced cancellation is settled but not reported as complete capture;
 - applies a runtime timeout;
+- if process lifecycle observation fails after a witnessed start, attempts bounded cleanup and returns a `lifecycle_error` receipt instead of throwing away the started-process evidence; a later successful poll may recover the exit status without manufacturing an error;
 - preserves whether execution actually started;
 - attempts process-tree termination on Windows after timeout.
 
 Every captured external launch therefore closes the resolve-to-spawn same-path replacement window. Plan-first execution adds the stronger cross-call check: reviewed path and typed identity material are checked before mutation/staging/launch, then that verified object is held through process creation. A stale reviewed plan is `not_executed`, not an execution failure.
 
-Timeout after launch is not treated as proof of failure-with-no-effect: partial external mutation may already have occurred, so audit state can remain `unknown`.
+Timeout or unrecovered lifecycle-observation failure after launch is not treated as proof of failure-with-no-effect: partial external mutation may already have occurred, so audit state remains `unknown`.
 
 ## Isolation
 
