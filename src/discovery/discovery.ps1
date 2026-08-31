@@ -4,7 +4,9 @@
 #
 # This broad snapshot deliberately avoids launching external developer tools.
 # Focused version probing belongs to tool_discover, where it can be time-bounded
-# and requested only when the result can change a routing decision.
+# and requested only when the result can change a routing decision. WSL control-
+# plane state and Dev Drive volume identity are overlaid by the Python coordinator
+# from Windows-owned wsl.exe/Win32 surfaces rather than inferred here.
 
 $ErrorActionPreference = "Stop"
 
@@ -80,59 +82,23 @@ catch {
     }
 }
 
-# Virtualization and isolation prerequisites. Optional-feature identity is the
-# authority for enabled/disabled state; executable presence alone is not enough.
+# Virtualization/isolation prerequisites whose authoritative state is exposed by
+# Windows optional-feature management. WSL is intentionally not derived from the
+# legacy optional component because current Store WSL is a separate servicing model.
 $hyperv = Get-OptionalFeatureProbe "Microsoft-Hyper-V"
 $sandbox = Get-OptionalFeatureProbe "Containers-DisposableClientVM"
-$wslFeature = Get-OptionalFeatureProbe "Microsoft-Windows-Subsystem-Linux"
-$wslExePresent = $null
-try {
-    $wslExePresent = Test-Path -LiteralPath "$env:WINDIR\System32\wsl.exe"
-}
-catch {
-    Add-DiscoveryError "WSL executable presence was not established: $($_.Exception.Message)"
-}
-
-$wslInstalled = $null
-if ($wslFeature.available -eq $true -and $wslExePresent -eq $true) {
-    $wslInstalled = $true
-}
-elseif ($wslFeature.available -eq $true -and $wslExePresent -eq $false) {
-    # The feature claims enabled while the required executable is absent. That
-    # is an observed inconsistency, not ordinary "missing" state.
-    Add-DiscoveryError "WSL feature is enabled but wsl.exe was not found"
-    $wslInstalled = $null
-}
-elseif ($wslFeature.available -eq $false -or $wslExePresent -eq $false) {
-    $wslInstalled = $false
-}
-
-$devDrives = @()
-try {
-    if ($null -ne (Get-Command Get-Volume -ErrorAction SilentlyContinue)) {
-        $devDrives = @(Get-Volume -ErrorAction Stop | Where-Object { $_.FileSystemLabel -match "DevDrive" } | ForEach-Object {
-            @{
-                drive_letter = [string]$_.DriveLetter
-                label = [string]$_.FileSystemLabel
-                size_gb = [math]::Round($_.Size / 1GB, 2)
-                free_space_gb = [math]::Round($_.SizeRemaining / 1GB, 2)
-            }
-        })
-    }
-}
-catch {
-    Add-DiscoveryError "Dev Drive inventory was not established: $($_.Exception.Message)"
-}
 
 $discoveryResult.virtualization = @{
     hyper_v_available = $hyperv.available
     hyper_v_state = $hyperv.state
-    wsl_installed = $wslInstalled
+    wsl_installed = $null
     wsl_version = $null
     wsl_distros = @()
     windows_sandbox_available = $sandbox.available
     windows_sandbox_state = $sandbox.state
-    dev_drives = $devDrives
+    dev_drive_enabled = $null
+    dev_drive_state = "unknown"
+    dev_drives = $null
 }
 
 # Package managers and development tools: presence only. Version details are
