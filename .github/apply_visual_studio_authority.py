@@ -35,7 +35,30 @@ replace_once(
 path = Path("tests/test_discovery_windows.py")
 text = path.read_text(encoding="utf-8")
 anchor = '''def test_broad_tool_presence_uses_native_application_resolution_with_wda_path_policy():\n'''
-insert = '''def test_visual_studio_presence_uses_installer_locator_not_directory_name():\n    text = SCRIPT.read_text(encoding="utf-8")\n    assert "Get-VisualStudioAvailability" in text\n    assert "Microsoft Visual Studio\\\\Installer\\\\vswhere.exe" in text\n    assert "-prerelease -latest -property installationPath" in text\n    assert 'Test-Path "C:\\\\Program Files\\\\Microsoft Visual Studio"' not in text\n    assert "visual_studio_available = $visualStudioAvailable" in text\n    assert "visual_studio = $visualStudioAvailable" in text\n\n\ndef test_visual_studio_locator_establishes_hosted_runner_instance():\n    command = rf'''\n$ErrorActionPreference = 'Stop'\n$null = . '{SCRIPT}'\n$result = Get-VisualStudioAvailability\nif ($result -ne $true) {{ throw "Visual Studio locator did not establish hosted IDE instance: $result" }}\n'''\n    result = subprocess.run(\n        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],\n        stdin=subprocess.DEVNULL,\n        capture_output=True,\n        text=True,\n        timeout=60,\n        check=False,\n    )\n    assert result.returncode == 0, result.stderr or result.stdout\n\n\n'''
+insert = """def test_visual_studio_presence_uses_installer_locator_not_directory_name():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "Get-VisualStudioAvailability" in text
+    assert "Microsoft Visual Studio\\\\Installer\\\\vswhere.exe" in text
+    assert "-prerelease -latest -property installationPath" in text
+    assert 'Test-Path "C:\\\\Program Files\\\\Microsoft Visual Studio"' not in text
+    assert "visual_studio_available = $visualStudioAvailable" in text
+    assert "visual_studio = $visualStudioAvailable" in text
+
+
+def test_visual_studio_locator_establishes_hosted_runner_instance():
+    command = rf'''\n$ErrorActionPreference = 'Stop'\n$null = . '{SCRIPT}'\n$result = Get-VisualStudioAvailability\nif ($result -ne $true) {{ throw "Visual Studio locator did not establish hosted IDE instance: $result" }}\n'''
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+"""
 if text.count(anchor) != 1:
     raise SystemExit("tests/test_discovery_windows.py: Visual Studio insertion anchor changed")
 text = text.replace(anchor, insert + anchor, 1)
