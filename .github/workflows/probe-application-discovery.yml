@@ -18,10 +18,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $originalPath = $env:PATH
-          $temp = Join-Path $env:RUNNER_TEMP 'wda-command-probe'
-          New-Item -ItemType Directory -Force -Path $temp | Out-Null
-          Set-Content -LiteralPath (Join-Path $temp 'wda-fake.exe') -Value 'not-an-exe' -Encoding Ascii
-          Push-Location $temp
+          $current = [IO.Path]::GetFullPath([Environment]::CurrentDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+          $providerCwd = [IO.Path]::GetFullPath((Get-Location).ProviderPath).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+          Write-Host "process cwd=$current powershell location=$providerCwd"
+          if (-not [StringComparer]::OrdinalIgnoreCase.Equals($current, $providerCwd)) {
+            throw 'Probe requires the PowerShell location to match the process cwd'
+          }
+          $fakePath = Join-Path $current 'wda-fake.exe'
+          Set-Content -LiteralPath $fakePath -Value 'not-an-exe' -Encoding Ascii
           try {
             function wda-function-only { 'function' }
             Set-Alias -Name wda-alias-only -Value Get-Date
@@ -36,14 +40,13 @@ jobs:
               throw 'Application filter accepted a function or alias'
             }
 
-            $env:PATH = ".;$temp;$originalPath"
+            $env:PATH = ".;$current;$originalPath"
             $fakeWithCwdPath = Get-Command -Name wda-fake -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
             Write-Host "fake with cwd/relative PATH=$($fakeWithCwdPath.Source)"
             if ($null -eq $fakeWithCwdPath) {
-              throw 'Expected native Application lookup to see fake executable through PATH'
+              throw 'Expected native Application lookup to see fake executable through cwd PATH entries'
             }
 
-            $current = [IO.Path]::GetFullPath([Environment]::CurrentDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
             $safe = @()
             foreach ($raw in ($env:PATH -split [IO.Path]::PathSeparator)) {
               $entry = [string]$raw
@@ -63,7 +66,7 @@ jobs:
             $fakeSafe = Get-Command -Name wda-fake -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
             Write-Host "fake with sanitized PATH exists=$($null -ne $fakeSafe)"
             if ($null -ne $fakeSafe) {
-              throw "Sanitized PATH still resolved cwd fake: $($fakeSafe.Source)"
+              throw "Sanitized PATH still resolved process-cwd fake: $($fakeSafe.Source)"
             }
 
             foreach ($name in @('python', 'git')) {
@@ -75,6 +78,5 @@ jobs:
             }
           } finally {
             $env:PATH = $originalPath
-            Pop-Location
-            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $fakePath -Force -ErrorAction SilentlyContinue
           }
