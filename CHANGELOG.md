@@ -39,6 +39,7 @@ Production-hardening and public-release cleanup.
 - Fail package-install execution closed when the cache mutation/invalidation transition cannot be established before launch.
 - Serialize audit rotation/append between Windows hook processes.
 - Make session/persistent audit summaries best-effort across retained log segments: a rotated predecessor that disappears or becomes unreadable after enumeration is skipped while remaining readable evidence is preserved, so Stop-time reporting does not become an execution blocker.
+- Bring Codex PostToolUse accounting to parity with Claude by persisting the same derived `execution_started` fact and reporting the per-session external-process start count without retaining raw tool responses.
 - Add audit schema version and explicit lifecycle fields while preserving legacy log readability.
 - Classify rejected `stale_plan` requests as `not_executed`, distinct from runtime execution failure.
 - Stop exposing the physical WDA data directory from `logs_query`.

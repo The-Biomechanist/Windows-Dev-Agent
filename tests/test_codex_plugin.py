@@ -231,20 +231,45 @@ def test_codex_trace_derives_known_success_and_preserves_unknown_without_payload
             "session_id": "s1",
             "tool_name": CODEX_PREFIX + "package_install",
             "tool_input": {"execute": True, "package_id": "secret"},
-            "tool_response": {"content": [{"type": "text", "text": '{"status":"completed","succeeded":true,"stdout":"secret"}'}]},
+            "tool_response": {"content": [{"type": "text", "text": '{"status":"completed","succeeded":true,"execution_started":true,"stdout":"secret"}'}]},
         }
     )
+    assert success["execution_started"] is True
     assert success["execution_outcome"] == "succeeded"
     assert "secret" not in json.dumps(success)
+
+    diagnostic = codex_trace.event_from_hook(
+        {
+            "session_id": "s1",
+            "tool_name": CODEX_PREFIX + "tool_discover",
+            "tool_input": {"category": "runtimes", "secret": "discard-me"},
+            "tool_response": {"content": [{"type": "text", "text": '{"execution_started":true,"runtimes":{"secret":"discard-me"}}'}]},
+        }
+    )
+    assert diagnostic["execution_started"] is True
+    assert diagnostic["execution_outcome"] == "not_applicable"
+    assert "discard-me" not in json.dumps(diagnostic)
+
+    planned = codex_trace.event_from_hook(
+        {
+            "session_id": "s1",
+            "tool_name": CODEX_PREFIX + "package_install",
+            "tool_input": {"execute": False, "package_id": "Python.Python.3.14"},
+            "tool_response": {"content": [{"type": "text", "text": '{"status":"planned"}'}]},
+        }
+    )
+    assert planned["execution_started"] is False
+    assert planned["execution_outcome"] == "not_executed"
 
     launched = codex_trace.event_from_hook(
         {
             "session_id": "s1",
             "tool_name": CODEX_PREFIX + "sandbox_run",
             "tool_input": {"execute": True},
-            "tool_response": {"content": [{"type": "text", "text": '{"status":"launched"}'}]},
+            "tool_response": {"content": [{"type": "text", "text": '{"status":"launched","execution_started":true}'}]},
         }
     )
+    assert launched["execution_started"] is True
     assert launched["execution_outcome"] == "unknown"
 
 
@@ -255,6 +280,7 @@ def test_codex_stop_hook_reports_unknown_instead_of_zero_failures(tmp_path: Path
     (data_dir / "agent.log").write_text(
         json.dumps({
             "event": "PostToolUse",
+            "execution_started": True,
             "execution_outcome": "unknown",
             "session_id": "session-codex",
             "tool_name": CODEX_PREFIX + "sandbox_run",
@@ -279,6 +305,7 @@ def test_codex_stop_hook_reports_unknown_instead_of_zero_failures(tmp_path: Path
     output = json.loads(result.stdout)
     assert "execution_failed=0" in output["systemMessage"]
     assert "execution_unknown=1" in output["systemMessage"]
+    assert "external_process_started=1" in output["systemMessage"]
 
 
 def test_codex_data_dir_uses_codex_home_not_hook_only_plugin_data(monkeypatch, tmp_path: Path):

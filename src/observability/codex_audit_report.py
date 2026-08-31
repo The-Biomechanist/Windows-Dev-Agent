@@ -52,6 +52,7 @@ def main() -> int:
         f"execution_failed={summary['execution_failed']}, "
         f"execution_unknown={summary['execution_unknown']}, "
         f"not_executed={summary['not_executed']}, "
+        f"external_process_started={summary['external_process_started']}, "
         f"permission_denials={summary['permission_denials']}."
     )
     print(json.dumps({"systemMessage": message}))
