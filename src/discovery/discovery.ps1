@@ -169,6 +169,23 @@ function Get-WslPolicyValue {
     }
 }
 
+function Get-WslRouteImplementationAllowed {
+    param(
+        $StoreServicePresent,
+        $InboxServicePresent,
+        $InboxPolicyAllowed
+    )
+
+    # Match sandbox routing authority: Store package presence can establish
+    # installation inventory, but only registered service implementations can
+    # establish a route. Failed service-state reads preserve unknown.
+    if ($null -eq $StoreServicePresent) { return $null }
+    if ($StoreServicePresent -eq $true) { return $true }
+    if ($null -eq $InboxServicePresent) { return $null }
+    if ($InboxServicePresent -eq $false) { return $false }
+    return $InboxPolicyAllowed
+}
+
 function Initialize-DevDriveNativeProbe {
     $existing = ([System.Management.Automation.PSTypeName]'WdaNative.DevDriveProbe').Type
     if ($null -ne $existing) { return $true }
@@ -411,21 +428,10 @@ $wsl1PolicyAllowed = if ($allowWsl1.established -eq $true) {
     -not ($allowWsl1.configured -eq $true -and $allowWsl1.value -eq 0)
 } else { $null }
 
-$wslImplementationAllowed = $null
-if ($storeWslImplementationPresent -eq $true) {
-    # AllowInboxWSL does not restrict Store/lifted WSL.
-    $wslImplementationAllowed = $true
-}
-elseif ($storeWslImplementationPresent -eq $false -and $inboxWslImplementationPresent -eq $true) {
-    $wslImplementationAllowed = $inboxWslPolicyAllowed
-}
-elseif ($storeWslImplementationPresent -eq $false -and $inboxWslImplementationPresent -eq $false) {
-    $wslImplementationAllowed = $false
-}
-elseif ($inboxWslImplementationPresent -eq $true -and $inboxWslPolicyAllowed -eq $true) {
-    # Inbox is definitely available and allowed even if Store state is unresolved.
-    $wslImplementationAllowed = $true
-}
+$wslImplementationAllowed = Get-WslRouteImplementationAllowed `
+    -StoreServicePresent $wslStoreServicePresent `
+    -InboxServicePresent $wslInboxServicePresent `
+    -InboxPolicyAllowed $inboxWslPolicyAllowed
 
 $wslDistros = @()
 $wslDefaultDistro = $null
