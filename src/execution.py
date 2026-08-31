@@ -222,12 +222,20 @@ class _TailBuffer:
         return snapshot.decode("utf-8", errors="replace")
 
 
-def _drain(stream: BinaryIO, tail: _TailBuffer) -> None:
+class _DrainState:
+    def __init__(self) -> None:
+        self.clean_eof = False
+
+
+def _drain(stream: BinaryIO, tail: _TailBuffer, state: _DrainState) -> None:
     try:
-        read_chunk = getattr(stream, "read1", stream.read)
+        read_chunk = getattr(stream, "read1", None)
+        if read_chunk is None:
+            read_chunk = stream.read
         while True:
             chunk = read_chunk(_READ_CHUNK_BYTES)
             if not chunk:
+                state.clean_eof = True
                 break
             tail.append(chunk)
     except (OSError, ValueError):
@@ -279,16 +287,21 @@ def _cancel_synchronous_reader(reader: threading.Thread) -> bool:
         close_handle(handle)
 
 
-def _settle_output_readers(readers: list[threading.Thread]) -> tuple[bool, bool]:
-    """Return (clean_eof_complete, no_reader_remains_active)."""
+def _settle_output_readers(
+    readers: list[threading.Thread],
+    states: list[_DrainState],
+) -> tuple[bool, bool]:
+    """Return (both_streams_observed_clean_eof, no_reader_remains_active)."""
+    if len(readers) != len(states):
+        raise ValueError("reader/state cardinality mismatch")
     _join_readers(readers, 2.0)
     pending = [reader for reader in readers if reader.is_alive()]
-    capture_complete = not pending
     if pending and os.name == "nt":
         for reader in pending:
             _cancel_synchronous_reader(reader)
         _join_readers(pending, 2.0)
     capture_settled = not any(reader.is_alive() for reader in readers)
+    capture_complete = capture_settled and all(state.clean_eof for state in states)
     return capture_complete, capture_settled
 
 
@@ -511,16 +524,17 @@ def run_bounded(
 
     assert process.stdout is not None and process.stderr is not None
     reader_suffix = str(getattr(process, "pid", id(process)))
+    reader_states = [_DrainState(), _DrainState()]
     readers = [
         threading.Thread(
             target=_drain,
-            args=(process.stdout, stdout_tail),
+            args=(process.stdout, stdout_tail, reader_states[0]),
             name=f"wda-stdout-drain-{reader_suffix}",
             daemon=True,
         ),
         threading.Thread(
             target=_drain,
-            args=(process.stderr, stderr_tail),
+            args=(process.stderr, stderr_tail, reader_states[1]),
             name=f"wda-stderr-drain-{reader_suffix}",
             daemon=True,
         ),
@@ -556,7 +570,9 @@ def run_bounded(
             except (OSError, ValueError, subprocess.TimeoutExpired):
                 returncode = _safe_poll(process)
     finally:
-        output_capture_complete, output_capture_settled = _settle_output_readers(readers)
+        output_capture_complete, output_capture_settled = _settle_output_readers(
+            readers, reader_states
+        )
 
     result: dict[str, Any] = {
         "succeeded": returncode == 0 and not timed_out and lifecycle_error is None,
