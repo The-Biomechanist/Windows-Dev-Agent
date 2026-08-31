@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-from pathlib import Path
 from typing import Any, Optional
 
 from src.execution import resolve_windows_system_executable, run_bounded
@@ -32,15 +31,17 @@ class _PersistentVolumeInformation(ctypes.Structure):
 def _developer_drive_enablement() -> tuple[Optional[bool], str, Optional[str]]:
     """Query the Windows developer-drive feature state through its Win32 API."""
     if os.name != "nt":
-        return None, "unknown", "Developer Drive state is only available on Windows"
+        return None, "unknown", None
     try:
         api = ctypes.WinDLL("api-ms-win-core-sysinfo-l1-2-6.dll", use_last_error=True)
         query = api.GetDeveloperDriveEnablementState
         query.argtypes = []
         query.restype = ctypes.c_int
         state = int(query())
-    except (AttributeError, OSError) as exc:
-        return None, "unknown", f"Developer Drive enablement API unavailable: {exc}"
+    except (AttributeError, OSError):
+        # Older supported Windows builds do not expose this API set. That is an
+        # unavailable probe surface, not evidence that discovery itself failed.
+        return None, "unsupported_api", None
 
     if state == 1:
         return True, "enabled", None
@@ -110,8 +111,7 @@ def _is_developer_volume(root: str) -> bool:
     close_handle.restype = wintypes.BOOL
 
     volume_name = rf"\\.\{root[:2]}"
-    # This is a query-only FSCTL. Request no data access and share the volume with
-    # ordinary readers/writers; Windows still decides whether the control query is permitted.
+    # CreateFile permits zero desired access for query-only device metadata.
     handle = create_file(
         volume_name,
         0,
@@ -196,7 +196,7 @@ def _volume_metadata(root: str) -> dict[str, Any]:
 def _developer_drive_inventory() -> tuple[Optional[list[dict[str, Any]]], list[str]]:
     """Enumerate mounted fixed Dev Drives using the volume's native persistent flag."""
     if os.name != "nt":
-        return None, ["Developer Drive inventory is only available on Windows"]
+        return None, []
     drives: list[dict[str, Any]] = []
     errors: list[str] = []
     try:
@@ -211,6 +211,7 @@ def _developer_drive_inventory() -> tuple[Optional[list[dict[str, Any]]], list[s
         except OSError as exc:
             errors.append(f"Developer Drive identity was not established for {root}: {exc}")
     if errors:
+        # Partial inventory is not promoted to a complete answer.
         return None, errors
     return drives, []
 
@@ -224,7 +225,6 @@ def probe_native_virtualization() -> dict[str, Any]:
     wsl_version: Optional[str] = None
     if os.name != "nt":
         wsl_installed = None
-        errors.append("WSL state is only available on Windows")
     else:
         wsl = resolve_windows_system_executable("wsl.exe")
         if wsl is None:
@@ -238,11 +238,9 @@ def probe_native_virtualization() -> dict[str, Any]:
             elif status.get("timed_out") is True:
                 wsl_installed = None
                 errors.append("WSL status probe timed out")
-            elif status.get("returncode") == 0:
-                wsl_installed = True
             else:
-                wsl_installed = None
-                errors.append(f"WSL status probe exited with code {status.get('returncode')}")
+                # The control-plane command itself is the availability witness.
+                wsl_installed = status.get("returncode") == 0
 
     dev_drive_enabled, dev_drive_state, enablement_error = _developer_drive_enablement()
     if enablement_error:
