@@ -292,8 +292,16 @@ def _settle_output_readers(readers: list[threading.Thread]) -> tuple[bool, bool]
     return capture_complete, capture_settled
 
 
+def _safe_poll(process: subprocess.Popen[bytes]) -> Optional[int]:
+    """Best-effort process-state observation; None means running or unestablished."""
+    try:
+        return process.poll()
+    except (OSError, ValueError):
+        return None
+
+
 def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
+    if _safe_poll(process) is not None:
         return
     if os.name == "nt":
         taskkill = resolve_windows_system_executable("taskkill.exe")
@@ -306,21 +314,24 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
             )
             cleanup_process = cleanup_launch.get("process")
             if cleanup_process is not None:
+                cleanup_wait_failed = False
                 try:
                     cleanup_process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
+                except (OSError, ValueError, subprocess.TimeoutExpired):
+                    cleanup_wait_failed = True
+                if cleanup_wait_failed:
                     try:
                         cleanup_process.kill()
-                    except OSError:
+                    except (OSError, ValueError):
                         pass
                     try:
                         cleanup_process.wait(timeout=2)
-                    except (OSError, subprocess.TimeoutExpired):
+                    except (OSError, ValueError, subprocess.TimeoutExpired):
                         pass
-    if process.poll() is None:
+    if _safe_poll(process) is None:
         try:
             process.kill()
-        except OSError:
+        except (OSError, ValueError):
             pass
 
 
@@ -519,6 +530,8 @@ def run_bounded(
 
     timed_out = False
     error: Optional[str] = None
+    lifecycle_error: Optional[str] = None
+    returncode: Optional[int] = None
     try:
         returncode = process.wait(timeout=max(1, int(timeout)))
     except subprocess.TimeoutExpired:
@@ -528,12 +541,25 @@ def run_bounded(
         try:
             returncode = process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            returncode = None
+            returncode = _safe_poll(process)
+        except (OSError, ValueError) as exc:
+            returncode = _safe_poll(process)
+            if returncode is None:
+                lifecycle_error = f"Process lifecycle observation failed after timeout cleanup: {exc}"
+    except (OSError, ValueError) as exc:
+        returncode = _safe_poll(process)
+        if returncode is None:
+            lifecycle_error = f"Process lifecycle observation failed after launch: {exc}"
+            _terminate_process_tree(process)
+            try:
+                returncode = process.wait(timeout=5)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                returncode = _safe_poll(process)
     finally:
         output_capture_complete, output_capture_settled = _settle_output_readers(readers)
 
     result: dict[str, Any] = {
-        "succeeded": returncode == 0 and not timed_out,
+        "succeeded": returncode == 0 and not timed_out and lifecycle_error is None,
         "returncode": returncode,
         "stdout": stdout_tail.text(),
         "stderr": stderr_tail.text(),
@@ -547,4 +573,8 @@ def run_bounded(
     if timed_out:
         result["timed_out"] = True
         result["error"] = error
+    if lifecycle_error is not None:
+        result["lifecycle_error"] = lifecycle_error
+        if not timed_out:
+            result["error"] = lifecycle_error
     return result
