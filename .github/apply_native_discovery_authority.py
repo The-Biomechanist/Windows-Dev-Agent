@@ -10,11 +10,12 @@ def replace_once(path: str, old: str, new: str) -> None:
     target.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
 
 
-# Repair the two PowerShell tokens caught during static review before execution.
+# Repair the three PowerShell tokens caught during static review before execution.
 ps = Path("src/discovery/discovery.ps1")
 text = ps.read_text(encoding="utf-8")
-if text.count("\nelif (") != 2:
-    raise SystemExit(f"discovery.ps1: expected two elif tokens, found {text.count(chr(10) + 'elif (')}")
+count = text.count("\nelif (")
+if count != 3:
+    raise SystemExit(f"discovery.ps1: expected three elif tokens, found {count}")
 ps.write_text(text.replace("\nelif (", "\nelseif ("), encoding="utf-8", newline="\n")
 
 replace_once(
@@ -28,7 +29,7 @@ replace_once(
     '''    selected = expected\n    if selected == "wsl":\n        wsl_executable = _wsl_executable()\n        wsl_state = query_wsl_route_state(wsl_executable)\n        if wsl_state.available is not True:\n            status = "unavailable" if wsl_state.available is False else "unknown"\n            return None, wsl_state.reason or "WSL route state could not be established", status\n    if selected == "dev_container":\n''',
 )
 
-# Existing MCP tests use deliberately fake WSL executable paths.  Make the
+# Existing MCP tests use deliberately fake WSL executable paths. Make the
 # native route precondition explicit in those fixtures rather than letting the
 # host runner's real WSL registration leak into unit-test behavior.
 path = Path("tests/test_mcp_runtime.py")
