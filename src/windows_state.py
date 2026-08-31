@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 try:  # Windows-only module; keep imports testable on non-Windows hosts.
     import winreg  # type: ignore
@@ -15,6 +14,8 @@ except ImportError:  # pragma: no cover - Windows CI exercises the real module.
 
 WSL_POLICY_KEY = r"SOFTWARE\Policies\WSL"
 WSL_USER_KEY = r"Software\Microsoft\Windows\CurrentVersion\Lxss"
+WSL_STORE_SERVICE_KEY = r"SYSTEM\CurrentControlSet\Services\WslService"
+WSL_INBOX_SERVICE_KEY = r"SYSTEM\CurrentControlSet\Services\LxssManager"
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,20 @@ def _read_policy_dword(name: str) -> tuple[Optional[int], Optional[str]]:
         return int(value), None
     except (TypeError, ValueError):
         return None, f"WSL policy {name} has an invalid value"
+
+
+def _service_registered(key_path: str) -> tuple[Optional[bool], Optional[str]]:
+    """Establish whether one WSL service implementation is registered."""
+    if winreg is None:
+        return None, "Windows registry access is unavailable"
+    access = winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0)
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, access):
+            return True, None
+    except FileNotFoundError:
+        return False, None
+    except OSError as exc:
+        return None, f"WSL service registration could not be established: {exc}"
 
 
 def _registered_default_distribution() -> tuple[Optional[str], Optional[int], Optional[bool], Optional[str]]:
@@ -106,6 +121,21 @@ def query_wsl_route_state(wsl_executable: Optional[str]) -> WslRouteState:
     if allow_wsl == 0:
         return WslRouteState(False, reason="Windows policy disables WSL")
 
+    store_service, service_error = _service_registered(WSL_STORE_SERVICE_KEY)
+    if service_error:
+        return WslRouteState(None, reason=service_error)
+    inbox_service, service_error = _service_registered(WSL_INBOX_SERVICE_KEY)
+    if service_error:
+        return WslRouteState(None, reason=service_error)
+    if store_service is not True and inbox_service is not True:
+        return WslRouteState(False, reason="No registered WSL service implementation is available")
+    if store_service is not True and inbox_service is True:
+        allow_inbox, policy_error = _read_policy_dword("AllowInboxWSL")
+        if policy_error:
+            return WslRouteState(None, reason=policy_error)
+        if allow_inbox == 0:
+            return WslRouteState(False, reason="Windows policy disables Inbox WSL and Store WSL is unavailable")
+
     default_name, distro_version, inventory_established, distro_error = _registered_default_distribution()
     if distro_error:
         return WslRouteState(None, reason=distro_error)
@@ -114,11 +144,17 @@ def query_wsl_route_state(wsl_executable: Optional[str]) -> WslRouteState:
     if not default_name:
         return WslRouteState(False, reason="No registered default WSL distribution is available")
 
-    if distro_version == 1:
+    if distro_version in {1, None}:
         allow_wsl1, policy_error = _read_policy_dword("AllowWSL1")
         if policy_error:
             return WslRouteState(None, default_distribution=default_name, reason=policy_error)
         if allow_wsl1 == 0:
-            return WslRouteState(False, default_distribution=default_name, reason="Windows policy disables WSL 1")
+            if distro_version == 1:
+                return WslRouteState(False, default_distribution=default_name, reason="Windows policy disables WSL 1")
+            return WslRouteState(
+                None,
+                default_distribution=default_name,
+                reason="Default WSL distribution version is unknown while Windows policy disables WSL 1",
+            )
 
     return WslRouteState(True, default_distribution=default_name)

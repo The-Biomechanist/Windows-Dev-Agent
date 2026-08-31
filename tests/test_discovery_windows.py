@@ -37,6 +37,10 @@ def test_wsl_discovery_is_store_inbox_agnostic_and_default_distro_aware():
     assert 'Services\\LxssManager' in text
     assert 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss' in text
     assert 'Get-WslPolicyValue "AllowWSL"' in text
+    assert 'Get-WslPolicyValue "AllowInboxWSL"' in text
+    assert 'Get-WslPolicyValue "AllowWSL1"' in text
+    assert 'Services\\WslService' in text
+    assert 'Services\\LxssManager' in text
     assert 'wsl_available = $wslAvailable' in text
     assert 'wsl_default_distro = $wslDefaultDistro' in text
 

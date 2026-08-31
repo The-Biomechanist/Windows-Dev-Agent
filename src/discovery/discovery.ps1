@@ -244,13 +244,20 @@ catch {
     Add-DiscoveryError "WSL executable presence was not established: $($_.Exception.Message)"
 }
 
-$wslServicePresent = $null
+$wslStoreServicePresent = $null
 try {
-    $wslServicePresent = (Test-Path -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\WslService") -or
-        (Test-Path -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\LxssManager")
+    $wslStoreServicePresent = Test-Path -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\WslService"
 }
 catch {
-    Add-DiscoveryError "WSL service registration was not established: $($_.Exception.Message)"
+    Add-DiscoveryError "Store WSL service registration was not established: $($_.Exception.Message)"
+}
+
+$wslInboxServicePresent = $null
+try {
+    $wslInboxServicePresent = Test-Path -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\LxssManager"
+}
+catch {
+    Add-DiscoveryError "Inbox WSL service registration was not established: $($_.Exception.Message)"
 }
 
 $storeWslPresent = $null
@@ -265,30 +272,65 @@ catch {
     Add-DiscoveryError "Store WSL package state was not established: $($_.Exception.Message)"
 }
 
+$storeWslImplementationPresent = $null
+if ($storeWslPresent -eq $true -or $wslStoreServicePresent -eq $true) {
+    $storeWslImplementationPresent = $true
+}
+elseif ($storeWslPresent -eq $false -and $wslStoreServicePresent -eq $false) {
+    $storeWslImplementationPresent = $false
+}
+
+$inboxWslImplementationPresent = $null
+if ($wslFeature.available -eq $true -or $wslInboxServicePresent -eq $true) {
+    $inboxWslImplementationPresent = $true
+}
+elseif ($wslFeature.available -eq $false -and $wslInboxServicePresent -eq $false) {
+    $inboxWslImplementationPresent = $false
+}
+
 $wslInstalled = $null
 if ($wslExePresent -eq $false) {
     $wslInstalled = $false
 }
 elseif ($wslExePresent -eq $true -and (
-    $wslServicePresent -eq $true -or $storeWslPresent -eq $true -or $wslFeature.available -eq $true
+    $storeWslImplementationPresent -eq $true -or $inboxWslImplementationPresent -eq $true
 )) {
     $wslInstalled = $true
 }
 elseif ($wslExePresent -eq $true -and
-      $wslServicePresent -eq $false -and
-      $storeWslPresent -eq $false -and
-      $wslFeature.available -eq $false) {
+      $storeWslImplementationPresent -eq $false -and
+      $inboxWslImplementationPresent -eq $false) {
     $wslInstalled = $false
 }
 
 $allowWsl = Get-WslPolicyValue "AllowWSL"
+$allowInboxWsl = Get-WslPolicyValue "AllowInboxWSL"
 $allowWsl1 = Get-WslPolicyValue "AllowWSL1"
 $wslPolicyAllowed = if ($allowWsl.established -eq $true) {
     -not ($allowWsl.configured -eq $true -and $allowWsl.value -eq 0)
 } else { $null }
+$inboxWslPolicyAllowed = if ($allowInboxWsl.established -eq $true) {
+    -not ($allowInboxWsl.configured -eq $true -and $allowInboxWsl.value -eq 0)
+} else { $null }
 $wsl1PolicyAllowed = if ($allowWsl1.established -eq $true) {
     -not ($allowWsl1.configured -eq $true -and $allowWsl1.value -eq 0)
 } else { $null }
+
+$wslImplementationAllowed = $null
+if ($storeWslImplementationPresent -eq $true) {
+    # AllowInboxWSL does not restrict Store/lifted WSL.
+    $wslImplementationAllowed = $true
+}
+elseif ($storeWslImplementationPresent -eq $false -and $inboxWslImplementationPresent -eq $true) {
+    $wslImplementationAllowed = $inboxWslPolicyAllowed
+}
+elseif ($storeWslImplementationPresent -eq $false -and $inboxWslImplementationPresent -eq $false) {
+    $wslImplementationAllowed = $false
+}
+elseif ($inboxWslImplementationPresent -eq $true -and $inboxWslPolicyAllowed -eq $true) {
+    # Inbox is definitely available and allowed even if Store state is unresolved.
+    $wslImplementationAllowed = $true
+}
 
 $wslDistros = @()
 $wslDefaultDistro = $null
@@ -318,10 +360,13 @@ catch {
 }
 
 $wslAvailable = $null
-if ($wslInstalled -eq $false -or $wslPolicyAllowed -eq $false) {
+if ($wslInstalled -eq $false -or $wslPolicyAllowed -eq $false -or $wslImplementationAllowed -eq $false) {
     $wslAvailable = $false
 }
-elseif ($wslInstalled -eq $true -and $wslPolicyAllowed -eq $true -and $wslDistroInventoryEstablished) {
+elseif ($wslInstalled -eq $true -and
+        $wslPolicyAllowed -eq $true -and
+        $wslImplementationAllowed -eq $true -and
+        $wslDistroInventoryEstablished) {
     if ([string]::IsNullOrWhiteSpace($wslDefaultDistro)) {
         $wslAvailable = $false
     }
@@ -329,6 +374,10 @@ elseif ($wslInstalled -eq $true -and $wslPolicyAllowed -eq $true -and $wslDistro
         $wslAvailable = $false
     }
     elseif ($wslDefaultVersion -eq 1 -and $wsl1PolicyAllowed -eq $null) {
+        $wslAvailable = $null
+    }
+    elseif ($null -eq $wslDefaultVersion -and $wsl1PolicyAllowed -eq $false) {
+        # The default may be WSL1, which policy would block; preserve uncertainty.
         $wslAvailable = $null
     }
     else {
