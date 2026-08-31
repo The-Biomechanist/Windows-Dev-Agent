@@ -83,7 +83,7 @@ agent obtains/reviews concrete plan where required
 → external result is observed separately from the request
 ```
 
-`execute: false` produces a plan. For `capability_run`, `package_install`, and `sandbox_run`, that plan includes the resolved absolute `executable` plus `executable_identity_kind` and `executable_identity_sha256`. A later `execute: true` call must echo those as `expected_executable`, `expected_executable_identity_kind`, and `expected_executable_identity_sha256`. Regular executables are fingerprinted from the exact opened file; Windows App Execution Aliases are fingerprinted from their `IO_REPARSE_TAG_APPEXECLINK` reparse data. If current resolution or identity material no longer matches the reviewed plan, WDA returns `stale_plan` with `execution_started: false`; the caller must obtain a fresh plan rather than silently accepting the changed identity.
+`execute: false` produces a plan. For `capability_run`, `package_install`, and `sandbox_run`, that plan includes the resolved absolute `executable` compatibility field plus `executable_identity_kind` and `executable_identity_sha256`; together these identify the reviewed **command target**. A later `execute: true` call must echo those as `expected_executable`, `expected_executable_identity_kind`, and `expected_executable_identity_sha256`. Native executable files are fingerprinted from the exact opened file, Windows App Execution Aliases from their `IO_REPARSE_TAG_APPEXECLINK` reparse data, and PowerShell `.ps1` command targets from their exact script bytes. PowerShell-script targets are launched only through the Windows-owned Windows PowerShell interpreter, whose identity is separately sealed at use time; `.cmd` and `.bat` are never admitted as command targets. If current target resolution or identity material no longer matches the reviewed plan, WDA returns `stale_plan` with `execution_started: false`; the caller must obtain a fresh plan rather than silently accepting the changed identity.
 
 The expected executable path/kind/fingerprint fields are stale-plan identity preconditions, **not** approval tokens. The active host still decides whether the exact executing call is permitted. The runtime independently blocks forbidden capability classes and rejects malformed direct MCP calls even when a client skipped advertised JSON-schema validation.
 
@@ -113,7 +113,7 @@ The cache uses the same canonical snapshot representation, is capped at 1 MiB, w
 
 ## Package execution
 
-WDA resolves the selected package-manager executable into an absolute path and typed identity for the plan. `package_install(execute:false)` returns `executable`, `executable_identity_kind`, and `executable_identity_sha256` with the exact argv for review. An executing call must pass all three back through their `expected_*` fields; WDA re-resolves and re-fingerprints the current package-manager identity and refuses to launch with `stale_plan` if it no longer matches. The bounded runner then holds the verified regular file or App Execution Alias reparse object stable through process creation—there is no third PATH lookup or unguarded check-to-launch gap.
+WDA resolves the selected package-manager command target into an absolute path and typed identity for the plan. `package_install(execute:false)` returns `executable`, `executable_identity_kind`, and `executable_identity_sha256` with the exact target argv for review. An executing call must pass all three back through their `expected_*` fields; WDA re-resolves and re-fingerprints the current package-manager target and refuses to launch with `stale_plan` if it no longer matches. The bounded runner then holds the verified native file, App Execution Alias, or PowerShell script target stable through process creation; script targets also bind the Windows-owned PowerShell interpreter. There is no third PATH lookup, implicit `cmd.exe` batch path, or unguarded check-to-launch gap.
 
 `package_search` can contact the package manager's configured source and therefore remains host-controlled even though it is non-mutating by intent. WinGet installation is bound to the `winget` source and runs non-interactively.
 
@@ -123,9 +123,9 @@ Installer exit status is not proof that the requested development task now works
 
 All captured subprocess execution goes through one bounded runner. It:
 
-- requires an absolute executable path;
-- on Windows, resolves ordinary bare tool names only from absolute inherited `PATH` entries, explicitly excluding the process current directory, empty/relative PATH entries, and relative command paths before identity sealing;
-- snapshots the current typed executable identity for ordinary probes and holds that exact file or App Execution Alias object through process creation;
+- requires an absolute typed command-target path;
+- on Windows, resolves ordinary bare tool names only from absolute inherited `PATH` entries, explicitly excluding the process current directory, empty/relative PATH entries, and relative command paths before identity sealing; native `.exe`/`.com` targets are preferred, `.ps1` shims are supported through Windows-owned PowerShell, and `.cmd`/`.bat` targets are rejected;
+- snapshots the current typed command-target identity for ordinary probes and holds that exact native file, App Execution Alias, or PowerShell script through process creation;
 - for plan-first execution, additionally requires the earlier reviewed typed identity fingerprint to match before launch;
 - disconnects child stdin from the MCP transport;
 - streams stdout/stderr while retaining only bounded tails in memory;
