@@ -217,6 +217,9 @@ def test_codex_hook_config_avoids_windows_quoted_command_bug_and_sandbox_autoall
         for hook in entry.get("hooks", [])
     ]
     assert commands
+    trusted_powershell = r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe "
+    assert all(command.startswith(trusted_powershell) for command in commands)
+    assert all(not command.lower().startswith("powershell.exe ") for command in commands)
     assert all('"' not in command for command in commands)
     assert all("$env:PLUGIN_ROOT" in command for command in commands)
     assert all("launch-python.ps1" in command for command in commands)

@@ -60,7 +60,7 @@ The published marketplace entry is pinned to an immutable payload commit. Instal
 
 Codex uses the installed plugin root as the MCP server's startup working directory so the relative launcher path resolves inside plugin code. That startup directory is **not** treated as project identity: project-scoped WDA tools still require the current absolute Codex project directory explicitly.
 
-Codex plugin hooks are an additional trusted layer, not a replacement for native permissions. Until the user trusts those hooks, Codex's own MCP/shell approval policy remains the operative boundary. Mutation-capable WDA tools remain prompt-gated.
+Codex plugin hooks are an additional trusted layer, not a replacement for native permissions. Until the user trusts those hooks, Codex's own MCP/shell approval policy remains the operative boundary. Mutation-capable WDA tools remain prompt-gated. Codex executes command hooks from the active request working directory, so WDA's Windows hook commands invoke `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` explicitly instead of resolving a bare `powershell.exe` from that project directory. The hook command line stays quote-free for compatibility with Codex's current Windows `cmd.exe /C` hook transport.
 
 ## Python bootstrap
 

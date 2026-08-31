@@ -10,6 +10,7 @@ Production-hardening and public-release cleanup.
 
 - Raise the supported Python floor to 3.11.
 - Add an isolated Windows-native Python launcher that avoids project/PATH executable shadowing, supports an explicit absolute host override, and runs correctly under Windows PowerShell 5.1.
+- Root Codex hook bootstrap PowerShell at `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` so hooks executed from the active project directory cannot resolve a project-local `powershell.exe`; preserve the quote-free command form required by Codex's current Windows hook transport.
 - Remove ambient/project-current-directory import dependence: Claude launches from the plugin root explicitly, while Codex uses its plugin-owned startup directory only to resolve the bundled launcher and never as project identity.
 - Consolidate Claude and Codex onto one bounded stdio transport.
 - Add strict runtime MCP argument validation and request/resource bounds.

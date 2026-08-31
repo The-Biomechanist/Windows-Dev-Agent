@@ -50,7 +50,7 @@ The expected executable path/kind/fingerprint fields are identity/staleness prec
 
 After identity validation, the already-established current absolute path is carried into process creation while the verified regular-file or App Execution Alias handle remains held. WDA does not perform a later PATH lookup for that execution. External probes that do not have a prior reviewed plan still snapshot their current typed executable identity immediately before launch and hold that same object through process creation, so they do not leave an unguarded resolve-to-spawn replacement window.
 
-The plugin's Python bootstrap does not find Python from the active project or inherited PATH. It uses Windows installation authorities/standard host locations or an explicit absolute `WINDOWS_DEV_AGENT_PYTHON` override, requires Python 3.11+, and runs the interpreter in isolated mode.
+The plugin's Python bootstrap does not find Python from the active project or inherited PATH. It uses Windows installation authorities/standard host locations or an explicit absolute `WINDOWS_DEV_AGENT_PYTHON` override, requires Python 3.11+, and runs the interpreter in isolated mode. Codex command hooks are themselves invoked through `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` rather than a bare `powershell.exe`, because Codex runs hook commands with the active request directory as their working directory.
 
 Windows-owned control-plane executables used by the runtime—such as WSL, Windows Sandbox, and Windows PowerShell discovery—are resolved from the Windows system installation instead of PATH.
 

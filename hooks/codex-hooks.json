@@ -7,8 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.safety.codex_gate",
-            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.safety.codex_gate",
+            "command": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.safety.codex_gate",
+            "commandWindows": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.safety.codex_gate",
             "timeout": 30,
             "description": "Deny forbidden Windows Dev Agent actions and otherwise defer to Codex permissions"
           }
@@ -21,8 +21,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.safety.codex_permission",
-            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.safety.codex_permission",
+            "command": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.safety.codex_permission",
+            "commandWindows": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.safety.codex_permission",
             "timeout": 30,
             "description": "Auto-allow only bounded plan calls; project plans must stay inside the authoritative Codex session cwd"
           }
@@ -35,8 +35,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.observability.codex_trace",
-            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.observability.codex_trace",
+            "command": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.observability.codex_trace",
+            "commandWindows": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.observability.codex_trace",
             "timeout": 30,
             "description": "Append minimal derived Windows Dev Agent completion metadata"
           }
@@ -48,8 +48,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.observability.codex_audit_report",
-            "commandWindows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.observability.codex_audit_report",
+            "command": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.observability.codex_audit_report",
+            "commandWindows": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $p=Join-Path $env:PLUGIN_ROOT 'scripts\\launch-python.ps1';^& $p -Module src.observability.codex_audit_report",
             "timeout": 30,
             "description": "Emit a Codex-valid Windows Dev Agent session audit summary with explicit unknown outcomes"
           }
