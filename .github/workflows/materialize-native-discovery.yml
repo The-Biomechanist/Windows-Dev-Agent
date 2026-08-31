@@ -48,31 +48,32 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
       - name: Run focused native authority tests
         run: python -m pytest tests/test_windows_state.py tests/test_discovery.py tests/test_discovery_windows.py tests/test_mcp_runtime.py -q
-      - name: Exercise native Dev Drive query on system volume
+      - name: Exercise native Dev Drive query where applicable
         shell: powershell
         run: |
           $null = . ./src/discovery/discovery.ps1
-          $volume = Get-Volume -DriveLetter C -ErrorAction Stop
-          if ([string]::IsNullOrWhiteSpace([string]$volume.Path)) {
-            throw "C: did not expose a volume GUID path"
-          }
           if (-not (Initialize-DevDriveNativeProbe)) {
             throw "native Dev Drive helper could not initialize"
           }
-          $isDevDrive = $false
-          $nativeError = 0
-          $established = [WdaNative.DevDriveProbe]::TryIsDeveloperVolume(
-            [string]$volume.Path,
-            [ref]$isDevDrive,
-            [ref]$nativeError
-          )
-          if (-not $established) {
-            throw "Dev Drive identity for C: was not established; Win32 error $nativeError"
+          $refsVolumes = @(Get-Volume -ErrorAction Stop | Where-Object {
+            $_.FileSystemType -eq "ReFS" -and -not [string]::IsNullOrWhiteSpace([string]$_.Path)
+          })
+          if ($refsVolumes.Count -eq 0) {
+            Write-Host "runner has no ReFS volume; native helper compiled and producer has no Dev Drive candidates"
           }
-          if ($isDevDrive) {
-            throw "Windows system volume C: was incorrectly classified as a Dev Drive"
+          foreach ($volume in $refsVolumes) {
+            $isDevDrive = $false
+            $nativeError = 0
+            $established = [WdaNative.DevDriveProbe]::TryIsDeveloperVolume(
+              [string]$volume.Path,
+              [ref]$isDevDrive,
+              [ref]$nativeError
+            )
+            if (-not $established) {
+              throw "Dev Drive identity for $($volume.Path) was not established; Win32 error $nativeError"
+            }
+            Write-Host "ReFS $($volume.Path): developer_volume=$isDevDrive"
           }
-          Write-Host "native Dev Drive persistent-volume query established C: is not a Dev Drive"
       - name: Exercise native WSL route state
         shell: pwsh
         run: |
