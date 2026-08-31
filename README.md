@@ -91,7 +91,7 @@ Claude's `PreToolUse` adapter can tighten the host decision (`ask` or `deny`) bu
 
 ## Project boundaries and reads
 
-Claude project-scoped tools are restricted to `${CLAUDE_PROJECT_DIR}` or a descendant. Codex requires the current absolute project directory explicitly because installed plugin code lives in a separate cache.
+Claude project-scoped tools are restricted to `${CLAUDE_PROJECT_DIR}` or a descendant. Codex requires the current absolute project directory explicitly because installed plugin code lives in a separate cache. When the bundled Codex hooks are trusted, every project-scoped call is independently checked against the host event `cwd` and an escape is denied before the MCP call runs. Without trusted hooks, Codex does not currently expose an equivalent project identity directly to the MCP server: the absolute path remains caller-selected and host-prompted, so WDA does not claim host-attested project confinement on that fallback path.
 
 Project-local configuration reads—including `.mcp.json`, `.continue/config.json`, `.vscode/extensions.json`, agent configuration markers, and Dev Container configuration detection—are checked component-by-component before use. JSON content is then consumed from a use-time opened handle whose final path is revalidated against the project boundary. A symbolic link or NTFS reparse point that would redirect a project-scoped read outside the intended tree is rejected rather than followed, including a boundary swapped after an earlier precheck.
 

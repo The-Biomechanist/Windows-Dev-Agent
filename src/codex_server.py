@@ -35,7 +35,9 @@ CODEX_INSTRUCTIONS = (
     "explicitly to project-scoped tools; never use the installed plugin cache as "
     "the project. Codex owns execution approval through MCP/shell policy. Bundled "
     "hook behavior is additional and is active only after the user trusts the "
-    "plugin hooks; the core mutation tools remain prompt-gated without it."
+    "plugin hooks; when trusted, those hooks independently bind project-scoped calls "
+    "to the host event cwd. Without trusted hooks, the required absolute project path is "
+    "caller-selected and prompt-visible rather than independently host-attested."
 )
 
 
