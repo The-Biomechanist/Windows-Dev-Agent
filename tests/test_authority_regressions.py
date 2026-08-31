@@ -2,13 +2,16 @@
 
 from pathlib import Path
 
+from src.file_guard import ExecutableIdentity
 from src.mcp import server
 
 
 def test_package_install_refuses_execution_when_cache_invalidation_fails(monkeypatch, tmp_path: Path):
     trusted = r"C:\trusted\winget.exe"
+    identity = ExecutableIdentity(kind="file", sha256="a" * 64)
     monkeypatch.setattr(server, "DATA_DIR", tmp_path)
     monkeypatch.setattr(server, "resolve_executable", lambda _name: trusted)
+    monkeypatch.setattr(server, "executable_identity", lambda _path: identity)
     monkeypatch.setattr(server, "executable_identity_matches", lambda expected, actual: expected == actual)
     monkeypatch.setattr(server, "invalidate_environment_cache", lambda _data_dir: False)
     monkeypatch.setattr(
@@ -24,6 +27,8 @@ def test_package_install_refuses_execution_when_cache_invalidation_fails(monkeyp
                 "source": "winget",
                 "execute": True,
                 "expected_executable": trusted,
+                "expected_executable_identity_kind": identity.kind,
+                "expected_executable_identity_sha256": identity.sha256,
             }
         )
     )

@@ -25,8 +25,13 @@ def _write_catalog(path: Path, safety: str = "reversible") -> None:
     )
 
 
-def _reviewed_executable(catalog: Path) -> str:
-    return run_capability("probe", execute=False, path=catalog)["executable"]
+def _reviewed_identity(catalog: Path) -> tuple[str, str, str]:
+    plan = run_capability("probe", execute=False, path=catalog)
+    return (
+        plan["executable"],
+        plan["executable_identity_kind"],
+        plan["executable_identity_sha256"],
+    )
 
 
 def test_catalog_loads_only_live_execution_fields(tmp_path: Path):
@@ -61,6 +66,8 @@ def test_plan_resolves_executable_identity_without_executing(tmp_path: Path):
     assert result["safety_class"] == "reversible"
     assert result["requires_host_approval"] is True
     assert result["executable"] == result["argv"][0]
+    assert result["executable_identity_kind"] == "file"
+    assert len(result["executable_identity_sha256"]) == 64
     assert Path(result["argv"][0]).is_absolute()
     assert "stdout" not in result
 
@@ -68,8 +75,15 @@ def test_plan_resolves_executable_identity_without_executing(tmp_path: Path):
 def test_execute_request_has_no_model_supplied_approval_bit(tmp_path: Path):
     catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "approval-required")
-    expected = _reviewed_executable(catalog)
-    result = run_capability("probe", execute=True, expected_executable=expected, path=catalog)
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=expected,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
     assert result["status"] == "completed"
     assert result["execution_started"] is True
     assert "runtime-ok" in result["stdout"]
@@ -84,7 +98,19 @@ def test_execute_requires_reviewed_executable_identity(tmp_path: Path, monkeypat
     assert missing["status"] == "invalid_input"
     assert missing["execution_started"] is False
 
-    stale = run_capability("probe", execute=True, expected_executable=str(tmp_path / "other.exe"), path=catalog)
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    missing_identity = run_capability("probe", execute=True, expected_executable=expected, path=catalog)
+    assert missing_identity["status"] == "invalid_input"
+    assert missing_identity["execution_started"] is False
+
+    stale = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=str(tmp_path / "other.exe"),
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
     assert stale["status"] == "stale_plan"
     assert stale["execution_started"] is False
 
@@ -127,11 +153,20 @@ def test_runner_receives_exact_resolved_executable(tmp_path: Path, monkeypatch):
         }
 
     monkeypatch.setattr(capabilities, "run_bounded", fake_run)
-    expected = _reviewed_executable(catalog)
-    result = run_capability("probe", execute=True, expected_executable=expected, path=catalog)
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=expected,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
     assert result["status"] == "completed"
     assert Path(observed["argv"][0]).is_absolute()
     assert Path(observed["argv"][0]).resolve() == Path(sys.executable).resolve()
+    assert observed["expected_executable_identity_kind"] == expected_kind
+    assert observed["expected_executable_identity_sha256"] == expected_sha256
 
 
 def test_spawn_failure_is_not_reported_as_executed(tmp_path: Path, monkeypatch):
@@ -142,7 +177,15 @@ def test_spawn_failure_is_not_reported_as_executed(tmp_path: Path, monkeypatch):
         "run_bounded",
         lambda *_args, **_kwargs: {"succeeded": False, "error": "launch failed", "execution_started": False},
     )
-    result = run_capability("probe", execute=True, expected_executable=_reviewed_executable(catalog), path=catalog)
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=expected,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
     assert result["status"] == "failed"
     assert result["execution_started"] is False
     assert "timed_out" not in result
@@ -156,7 +199,15 @@ def test_timeout_preserves_started_but_unfinished_execution_state(tmp_path: Path
         "run_bounded",
         lambda *_args, **_kwargs: {"succeeded": False, "error": "timeout", "execution_started": True, "timed_out": True},
     )
-    result = run_capability("probe", execute=True, expected_executable=_reviewed_executable(catalog), path=catalog)
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=expected,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
     assert result["status"] == "failed"
     assert result["execution_started"] is True
     assert result["timed_out"] is True

@@ -11,6 +11,13 @@ import subprocess
 import threading
 from typing import Any, BinaryIO, Optional
 
+from src.file_guard import (
+    FileBoundaryError,
+    FileIdentityMismatch,
+    guarded_executable_identity,
+    valid_executable_identity,
+)
+
 DEFAULT_STDOUT_BYTES = 8_000
 DEFAULT_STDERR_BYTES = 4_000
 _READ_CHUNK_BYTES = 8_192
@@ -160,15 +167,18 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
             pass
 
 
-def run_bounded(
+def launch_bound(
     argv: list[str],
     *,
     cwd: Optional[Path] = None,
-    timeout: int = 30,
-    stdout_bytes: int = DEFAULT_STDOUT_BYTES,
-    stderr_bytes: int = DEFAULT_STDERR_BYTES,
+    expected_executable_identity_kind: Optional[str] = None,
+    expected_executable_identity_sha256: Optional[str] = None,
+    stdin: Any = subprocess.DEVNULL,
+    stdout: Any = None,
+    stderr: Any = None,
+    creationflags: int = 0,
 ) -> dict[str, Any]:
-    """Execute an absolute argv[0] while retaining only bounded stdout/stderr tails."""
+    """Start one absolute executable while optionally sealing its reviewed identity."""
     if not argv or not isinstance(argv[0], str):
         return {"succeeded": False, "error": "argv must contain an executable", "argv": argv, "execution_started": False}
     executable = Path(argv[0]).expanduser()
@@ -185,21 +195,83 @@ def run_bounded(
     except OSError as exc:
         return {"succeeded": False, "error": str(exc), "argv": argv, "execution_started": False}
 
-    stdout_tail = _TailBuffer(stdout_bytes)
-    stderr_tail = _TailBuffer(stderr_bytes)
-    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
-    try:
-        process = subprocess.Popen(
+    identity_requested = expected_executable_identity_kind is not None or expected_executable_identity_sha256 is not None
+    if identity_requested and not valid_executable_identity(
+        expected_executable_identity_kind,
+        expected_executable_identity_sha256,
+    ):
+        return {
+            "succeeded": False,
+            "error": "expected executable identity is malformed",
+            "argv": argv,
+            "execution_started": False,
+            "identity_invalid": True,
+        }
+
+    def spawn() -> subprocess.Popen[bytes]:
+        return subprocess.Popen(
             argv,
             cwd=str(cwd) if cwd else None,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
             shell=False,
             creationflags=creationflags,
         )
+
+    try:
+        if not identity_requested:
+            process = spawn()
+        else:
+            # Keep the exact reviewed object stable through CreateProcess. A normal
+            # executable is byte-hashed; an App Execution Alias is fingerprinted
+            # from its reparse payload and held open as that reparse object.
+            with guarded_executable_identity(
+                executable,
+                expected_kind=expected_executable_identity_kind,
+                expected_sha256=expected_executable_identity_sha256,
+            ):
+                process = spawn()
+    except (FileIdentityMismatch, FileBoundaryError) as exc:
+        return {
+            "succeeded": False,
+            "error": str(exc),
+            "argv": argv,
+            "execution_started": False,
+            "identity_mismatch": True,
+        }
     except OSError as exc:
         return {"succeeded": False, "error": str(exc), "argv": argv, "execution_started": False}
+    return {"process": process, "argv": argv, "execution_started": True}
+
+
+def run_bounded(
+    argv: list[str],
+    *,
+    cwd: Optional[Path] = None,
+    timeout: int = 30,
+    stdout_bytes: int = DEFAULT_STDOUT_BYTES,
+    stderr_bytes: int = DEFAULT_STDERR_BYTES,
+    expected_executable_identity_kind: Optional[str] = None,
+    expected_executable_identity_sha256: Optional[str] = None,
+) -> dict[str, Any]:
+    """Execute an absolute argv[0] while retaining only bounded stdout/stderr tails."""
+    stdout_tail = _TailBuffer(stdout_bytes)
+    stderr_tail = _TailBuffer(stderr_bytes)
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+    launch = launch_bound(
+        argv,
+        cwd=cwd,
+        expected_executable_identity_kind=expected_executable_identity_kind,
+        expected_executable_identity_sha256=expected_executable_identity_sha256,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creationflags,
+    )
+    process = launch.pop("process", None)
+    if process is None:
+        return launch
 
     assert process.stdout is not None and process.stderr is not None
     readers = [

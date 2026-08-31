@@ -44,11 +44,11 @@ The MCP runtime validates tool arguments again at execution time. Advertised JSO
 
 WDA resolves external executables to absolute identities and captured subprocess execution refuses an unresolved/bare executable.
 
-For plan-first `capability_run`, `package_install`, and `sandbox_run`, the `execute:false` result exposes the absolute `executable` used to construct the reviewed plan. A later `execute:true` call must echo that value as `expected_executable`. WDA then establishes the current executable again and requires it to resolve to the same live absolute file before mutation, Sandbox staging, or process launch. A missing identity is invalid input; a changed identity returns `stale_plan` with `execution_started:false` and requires a fresh plan.
+For plan-first `capability_run`, `package_install`, and `sandbox_run`, the `execute:false` result exposes the absolute `executable` plus `executable_identity_kind` and `executable_identity_sha256`. A later `execute:true` call must echo those values through the matching `expected_*` fields. Regular executable files are fingerprinted from the exact opened file; Windows App Execution Aliases are represented separately and fingerprinted from their AppExecLink reparse data. WDA establishes the current path and typed identity again before mutation or Sandbox staging, and the launch layer holds the verified file or alias object stable through process creation. Missing identity material is invalid input; changed identity returns `stale_plan` with `execution_started:false` and requires a fresh plan.
 
-`expected_executable` is an identity/staleness precondition only. It is not evidence that a person approved anything and does not replace Claude/Codex permission authority.
+The expected executable path/kind/fingerprint fields are identity/staleness preconditions only. They are not evidence that a person approved anything and do not replace Claude/Codex permission authority.
 
-After the identity check, the already-established current absolute path is carried into the process launch; WDA does not perform a later PATH lookup for that execution.
+After identity validation, the already-established current absolute path is carried into process creation while the verified regular-file or App Execution Alias handle remains held. WDA does not perform a later PATH lookup for that execution.
 
 The plugin's Python bootstrap does not find Python from the active project or inherited PATH. It uses Windows installation authorities/standard host locations or an explicit absolute `WINDOWS_DEV_AGENT_PYTHON` override, requires Python 3.11+, and runs the interpreter in isolated mode.
 
@@ -56,7 +56,7 @@ Windows-owned control-plane executables used by the runtime—such as WSL, Windo
 
 ### Project scope is not permission to follow links anywhere
 
-Project-scoped reads are bounded to the host project and reject symbolic-link/NTFS-reparse traversal at the relevant read/staging boundary. Failure to establish reparse metadata is not treated as proof that a path is ordinary.
+Project-scoped reads are bounded to the host project and reject symbolic-link/NTFS-reparse traversal at the relevant read/staging boundary. Project JSON is consumed from the same use-time verified handle whose final path is checked, and Windows Sandbox payload staging revalidates file/directory identities and budgets while copying. Failure to establish reparse metadata is not treated as proof that a path is ordinary.
 
 Dev Container routing requires an actual project `.devcontainer/devcontainer.json` or root `.devcontainer.json`; an empty `.devcontainer/` directory is not configuration evidence, and linked/reparse configuration is rejected at the WDA read boundary.
 

@@ -12,8 +12,8 @@ Package installation is `approval-required`. The executing MCP call contains the
 ## Procedure
 
 1. **Establish package identity before mutation.** Preserve an exact package ID supplied by the user or authoritative project/config state. Otherwise call `package_search`, inspect the candidates, and resolve the exact identity. Do not guess an ID from naming conventions.
-2. Call `package_install` with `execute: false`. Present the returned source, exact package ID, `executable`, argv, command, and agreement flags as the planned mutation. The returned absolute `executable` is part of the reviewed execution identity.
-3. When installation is actually requested, call the same tool with `execute: true` and set `expected_executable` to the exact `executable` returned by that reviewed plan. This is an identity precondition, not an approval token. If the runtime returns `stale_plan`, obtain a fresh `execute: false` plan instead of substituting the newly resolved path into the old plan. The active host's permission system decides whether the executing call proceeds.
+2. Call `package_install` with `execute: false`. Present the returned source, exact package ID, `executable`, `executable_identity_kind`, `executable_identity_sha256`, argv, command, and agreement flags as the planned mutation. The path plus typed identity fingerprint form the reviewed execution identity.
+3. When installation is actually requested, call the same tool with `execute: true` and copy the plan values unchanged into `expected_executable`, `expected_executable_identity_kind`, and `expected_executable_identity_sha256`. These are identity preconditions, not approval tokens. If the runtime returns `stale_plan`, obtain a fresh `execute: false` plan instead of substituting newly observed identity values into the old plan. The active host's permission system decides whether the executing call proceeds.
 4. Inspect stdout/stderr, return code, and `execution_started`. Do not infer success from installer invocation. A failed installer can still partially mutate host state.
 5. Verify the resulting host state on the narrowest relevant surface: executable discovery, version output, or the task-specific check that required the package. Package execution invalidates the cached environment snapshot before the installer starts; if that invalidation cannot be established, the runtime refuses to launch the installer. If a full snapshot is needed afterward, use fresh state.
 
@@ -28,6 +28,6 @@ Package installation is `approval-required`. The executing MCP call contains the
 
 - Never interpolate a package ID into a shell string. The MCP server validates it and executes an argv vector with `shell=False`.
 - Never set `execute: true` merely to test availability.
-- Never change `expected_executable` merely to make an old plan executable; changed resolution invalidates the plan.
+- Never change any `expected_executable*` identity field merely to make an old plan executable; changed path, kind, or fingerprint invalidates the plan.
 - Never claim an install succeeded without observing the installer result and a relevant post-install check.
 - Never bypass, disable, or imitate the active host's permission boundary.

@@ -32,9 +32,17 @@ from src.capabilities import (
 from src.discovery.discovery import EnvironmentDiscovery, invalidate_environment_cache
 from src.execution import (
     executable_identity_matches,
+    launch_bound,
     resolve_executable,
     resolve_windows_system_executable,
     run_bounded,
+)
+from src.file_guard import (
+    FileBoundaryError,
+    executable_identity,
+    guarded_directory,
+    guarded_open_read,
+    valid_executable_identity,
 )
 from src.observability.trace import history_log_files
 
@@ -75,6 +83,23 @@ def _expected_executable_property() -> dict[str, Any]:
     }
 
 
+def _expected_executable_identity_kind_property() -> dict[str, Any]:
+    return {
+        "type": "string",
+        "enum": ["file", "app_execution_alias"],
+        "description": "Executable identity kind returned by the reviewed execute=false plan; required when execute=true",
+    }
+
+
+def _expected_executable_identity_sha256_property() -> dict[str, Any]:
+    return {
+        "type": "string",
+        "minLength": 64,
+        "maxLength": 64,
+        "description": "SHA-256 fingerprint of the reviewed executable identity material; required when execute=true",
+    }
+
+
 TOOLS = [
     {
         "name": "env_inspect",
@@ -109,6 +134,8 @@ TOOLS = [
                 "cwd": {"type": "string", "description": "Working directory; defaults to the active host project"},
                 "execute": _bool_property("Execute instead of returning the concrete plan"),
                 "expected_executable": _expected_executable_property(),
+                "expected_executable_identity_kind": _expected_executable_identity_kind_property(),
+                "expected_executable_identity_sha256": _expected_executable_identity_sha256_property(),
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600, "default": 120},
             },
             "required": ["capability"],
@@ -149,6 +176,8 @@ TOOLS = [
                 "source": {"type": "string", "enum": ["winget", "chocolatey", "scoop"], "default": "winget"},
                 "execute": _bool_property("Execute the reviewed install plan"),
                 "expected_executable": _expected_executable_property(),
+                "expected_executable_identity_kind": _expected_executable_identity_kind_property(),
+                "expected_executable_identity_sha256": _expected_executable_identity_sha256_property(),
             },
             "required": ["package_id"],
         },
@@ -175,6 +204,8 @@ TOOLS = [
                 },
                 "execute": _bool_property("Launch the reviewed route"),
                 "expected_executable": _expected_executable_property(),
+                "expected_executable_identity_kind": _expected_executable_identity_kind_property(),
+                "expected_executable_identity_sha256": _expected_executable_identity_sha256_property(),
             },
             "required": ["command", "isolation_requirement"],
         },
@@ -352,6 +383,8 @@ async def handle_capability_run(args: dict[str, Any]) -> dict[str, Any]:
         cwd=str(cwd),
         timeout_seconds=args.get("timeout_seconds", 120),
         expected_executable=args.get("expected_executable"),
+        expected_executable_identity_kind=args.get("expected_executable_identity_kind"),
+        expected_executable_identity_sha256=args.get("expected_executable_identity_sha256"),
     )
 
 
@@ -553,17 +586,27 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
         return {"status": "invalid_input", "error": f"Unsupported package source: {source}"}
     resolved = _resolve_argv(configured)
     argv = resolved or configured
+    identity = executable_identity(resolved[0]) if resolved else None
     plan = {
         "status": "planned",
         "package_id": package_id,
         "source": source,
         "safety_class": "approval-required",
         "executable": resolved[0] if resolved else None,
+        "executable_identity_kind": identity.kind if identity else None,
+        "executable_identity_sha256": identity.sha256 if identity else None,
         "argv": argv,
         "command": command_display(argv),
         "requires_host_approval": True,
         "executable_resolved": resolved is not None,
     }
+    if resolved is not None and identity is None:
+        return {
+            **plan,
+            "status": "unavailable",
+            "error": "Package-manager executable identity could not be established",
+            "execution_started": False,
+        }
     if args.get("execute") is not True:
         return plan
     if resolved is None:
@@ -583,6 +626,22 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
             "error": "Resolved executable no longer matches the reviewed plan; obtain a fresh plan before execution",
             "execution_started": False,
         }
+    expected_kind = args.get("expected_executable_identity_kind")
+    expected_sha256 = args.get("expected_executable_identity_sha256")
+    if not valid_executable_identity(expected_kind, expected_sha256):
+        return {
+            **plan,
+            "status": "invalid_input",
+            "error": "reviewed executable identity kind and fingerprint are required for execution",
+            "execution_started": False,
+        }
+    if identity is None or identity.kind != expected_kind or identity.sha256 != expected_sha256.lower():
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "Executable identity no longer matches the reviewed plan; obtain a fresh plan before execution",
+            "execution_started": False,
+        }
 
     cache_invalidated = invalidate_environment_cache(DATA_DIR)
     if not cache_invalidated:
@@ -593,7 +652,20 @@ async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
             "execution_started": False,
             "environment_cache_invalidated": False,
         }
-    result = run_bounded(resolved, timeout=600)
+    result = run_bounded(
+        resolved,
+        timeout=600,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256.lower(),
+    )
+    if result.get("identity_mismatch") is True:
+        return {
+            **plan,
+            **result,
+            "status": "stale_plan",
+            "error": "Executable identity changed after plan validation; obtain a fresh plan before execution",
+            "environment_cache_invalidated": True,
+        }
     return {
         **plan,
         **result,
@@ -747,7 +819,50 @@ def _cleanup_stale_sandbox_bundles() -> None:
         return
 
 
-def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]], sandbox_executable: str) -> tuple[Path, Path, list[str]]:
+def _stage_windows_sandbox_payloads(workspace: Path, payloads: list[tuple[Path, Path]], payload_dir: Path) -> None:
+    """Copy only bytes read from use-time verified workspace handles into WDA staging."""
+    workspace = workspace.resolve()
+    budget = {"entries": 0, "bytes": 0}
+
+    def stage(source: Path, destination: Path) -> None:
+        budget["entries"] += 1
+        if budget["entries"] > MAX_SANDBOX_PAYLOAD_ENTRIES:
+            raise RuntimeError("payload selection exceeds the Sandbox staging entry budget")
+        try:
+            if source.is_symlink() or _is_reparse_point(source):
+                raise RuntimeError(f"payload path crossed a symbolic link or reparse point during staging: {source}")
+            if source.is_dir():
+                with guarded_directory(source, root=workspace, exact_path=True):
+                    destination.mkdir(parents=True, exist_ok=True)
+                    with os.scandir(source) as entries:
+                        children = [Path(entry.path) for entry in entries]
+                    for child in children:
+                        stage(child, destination / child.name)
+                return
+            if source.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with guarded_open_read(source, root=workspace, exact_path=True) as incoming:
+                    with destination.open("xb") as outgoing:
+                        while True:
+                            chunk = incoming.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            budget["bytes"] += len(chunk)
+                            if budget["bytes"] > MAX_SANDBOX_PAYLOAD_BYTES:
+                                raise RuntimeError("payload selection exceeds the Sandbox staging byte budget")
+                            outgoing.write(chunk)
+                return
+        except FileBoundaryError as exc:
+            raise RuntimeError(str(exc)) from exc
+        except OSError as exc:
+            raise RuntimeError(f"payload could not be staged safely: {exc}") from exc
+        raise RuntimeError(f"payload path is not a regular file or directory: {source}")
+
+    for _source, rel in payloads:
+        stage(workspace / rel, payload_dir / rel)
+
+
+def _prepare_windows_sandbox(command: str, workspace: Path, payloads: list[tuple[Path, Path]], sandbox_executable: str) -> tuple[Path, Path, list[str]]:
     if not isinstance(sandbox_executable, str) or not sandbox_executable:
         raise RuntimeError("Windows Sandbox executable identity was not established")
     root = _sandbox_state_root()
@@ -758,13 +873,7 @@ def _prepare_windows_sandbox(command: str, payloads: list[tuple[Path, Path]], sa
         share_dir = bundle_root / "share"
         payload_dir = share_dir / "payload"
         payload_dir.mkdir(parents=True)
-        for source, rel in payloads:
-            destination = payload_dir / rel
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_dir():
-                shutil.copytree(source, destination)
-            else:
-                shutil.copy2(source, destination)
+        _stage_windows_sandbox_payloads(workspace, payloads, payload_dir)
         script_path = share_dir / "run.cmd"
         script_path.write_text(
             "@echo off\r\n"
@@ -857,6 +966,15 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
     else:
         return {"status": "invalid_input", "error": f"Unsupported environment: {environment}"}
 
+    identity = executable_identity(executable)
+    if identity is None:
+        return {
+            "status": "unavailable",
+            "environment": environment,
+            "error": "Sandbox backend executable identity could not be established",
+            "execution_started": False,
+        }
+
     plan = {
         "status": "planned",
         "environment": environment,
@@ -865,6 +983,8 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
         "payload_paths": [str(rel) for _, rel in payloads],
         "safety_class": "approval-required",
         "executable": executable,
+        "executable_identity_kind": identity.kind,
+        "executable_identity_sha256": identity.sha256,
         "argv": argv,
         "command": command_display(argv),
         "launch_kind": launch_kind,
@@ -889,18 +1009,45 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
             "error": "Resolved executable no longer matches the reviewed plan; obtain a fresh plan before execution",
             "execution_started": False,
         }
+    expected_kind = args.get("expected_executable_identity_kind")
+    expected_sha256 = args.get("expected_executable_identity_sha256")
+    if not valid_executable_identity(expected_kind, expected_sha256):
+        return {
+            **plan,
+            "status": "invalid_input",
+            "error": "reviewed executable identity kind and fingerprint are required for execution",
+            "execution_started": False,
+        }
+    if identity.kind != expected_kind or identity.sha256 != expected_sha256.lower():
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "Executable identity no longer matches the reviewed plan; obtain a fresh plan before execution",
+            "execution_started": False,
+        }
 
     if environment == "windows_sandbox":
         _cleanup_stale_sandbox_bundles()
         try:
-            bundle_root, _config_path, launch_argv = _prepare_windows_sandbox(command, payloads, executable)
+            bundle_root, _config_path, launch_argv = _prepare_windows_sandbox(command, workspace, payloads, executable)
         except (OSError, RuntimeError) as exc:
             return {**plan, "status": "failed", "error": str(exc), "execution_started": False}
-        try:
-            process = subprocess.Popen(launch_argv, cwd=str(workspace), stdin=subprocess.DEVNULL, shell=False)
-        except OSError as exc:
+        launch = launch_bound(
+            launch_argv,
+            cwd=workspace,
+            expected_executable_identity_kind=expected_kind,
+            expected_executable_identity_sha256=expected_sha256.lower(),
+            stdin=subprocess.DEVNULL,
+        )
+        process = launch.get("process")
+        if process is None:
             shutil.rmtree(bundle_root, ignore_errors=True)
-            return {**plan, "status": "failed", "error": str(exc), "execution_started": False, "cleanup_performed": True}
+            status = "stale_plan" if launch.get("identity_mismatch") is True else "failed"
+            error = (
+                "Executable identity changed after plan validation; obtain a fresh plan before execution"
+                if status == "stale_plan" else str(launch.get("error", "Sandbox launch failed"))
+            )
+            return {**plan, **launch, "status": status, "error": error, "cleanup_performed": True}
         threading.Thread(target=_cleanup_after_sandbox_exit, args=(process, bundle_root), daemon=True).start()
         return {
             **plan,
@@ -912,7 +1059,20 @@ async def handle_sandbox_run(args: dict[str, Any]) -> dict[str, Any]:
             "execution_started": True,
         }
 
-    result = run_bounded(argv, cwd=workspace, timeout=600)
+    result = run_bounded(
+        argv,
+        cwd=workspace,
+        timeout=600,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256.lower(),
+    )
+    if result.get("identity_mismatch") is True:
+        return {
+            **plan,
+            **result,
+            "status": "stale_plan",
+            "error": "Executable identity changed after plan validation; obtain a fresh plan before execution",
+        }
     return {**plan, **result, "status": "completed" if result.get("succeeded") else "failed"}
 
 
@@ -951,10 +1111,16 @@ def _safe_json(path: Path, *, project_root: Optional[Path] = None) -> tuple[Opti
         if not exists:
             return None, "missing"
     try:
-        with path.open("rb") as handle:
-            raw = handle.read(MAX_JSON_CONFIG_BYTES + 1)
+        if project_root is not None:
+            with guarded_open_read(path, root=project_root, exact_path=True) as handle:
+                raw = handle.read(MAX_JSON_CONFIG_BYTES + 1)
+        else:
+            with path.open("rb") as handle:
+                raw = handle.read(MAX_JSON_CONFIG_BYTES + 1)
     except FileNotFoundError:
         return None, "missing"
+    except FileBoundaryError as exc:
+        return None, str(exc)
     except OSError as exc:
         return None, str(exc)
     if len(raw) > MAX_JSON_CONFIG_BYTES:

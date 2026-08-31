@@ -19,6 +19,7 @@ import subprocess
 from typing import Any, Iterable, Mapping, Optional
 
 from src.execution import executable_identity_matches, resolve_executable, run_bounded
+from src.file_guard import executable_identity, valid_executable_identity
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CAPABILITIES_FILE = ROOT / "capabilities.json"
@@ -164,6 +165,8 @@ def run_capability(
     cwd: Optional[str] = None,
     timeout_seconds: int = 120,
     expected_executable: Optional[str] = None,
+    expected_executable_identity_kind: Optional[str] = None,
+    expected_executable_identity_sha256: Optional[str] = None,
     path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Plan or execute a configured capability under host-owned approval."""
@@ -192,6 +195,7 @@ def run_capability(
 
     safety_class = effective_safety(capability, extra_args)
     argv = [*tool.argv, *extra_args]
+    identity = executable_identity(tool.argv[0])
     plan: dict[str, Any] = {
         "status": "planned",
         "capability": capability.id,
@@ -200,11 +204,20 @@ def run_capability(
         "safety_class": safety_class,
         "tool": tool.name,
         "executable": tool.argv[0],
+        "executable_identity_kind": identity.kind if identity else None,
+        "executable_identity_sha256": identity.sha256 if identity else None,
         "argv": argv,
         "command": command_display(argv),
         "requires_host_approval": safety_class in {"reversible", "approval-required"},
     }
 
+    if identity is None:
+        return {
+            **plan,
+            "status": "unavailable",
+            "error": "Executable identity could not be established",
+            "execution_started": False,
+        }
     if not execute:
         return plan
     if safety_class == "forbidden":
@@ -223,6 +236,23 @@ def run_capability(
             "error": "Resolved executable no longer matches the reviewed plan; obtain a fresh plan before execution",
             "execution_started": False,
         }
+    if not valid_executable_identity(expected_executable_identity_kind, expected_executable_identity_sha256):
+        return {
+            **plan,
+            "status": "invalid_input",
+            "error": "reviewed executable identity kind and fingerprint are required for execution",
+            "execution_started": False,
+        }
+    if (
+        identity.kind != expected_executable_identity_kind
+        or identity.sha256 != expected_executable_identity_sha256.lower()
+    ):
+        return {
+            **plan,
+            "status": "stale_plan",
+            "error": "Executable identity no longer matches the reviewed plan; obtain a fresh plan before execution",
+            "execution_started": False,
+        }
 
     run_cwd: Optional[Path] = None
     if cwd:
@@ -234,7 +264,16 @@ def run_capability(
         argv,
         cwd=run_cwd,
         timeout=max(1, min(int(timeout_seconds), 600)),
+        expected_executable_identity_kind=expected_executable_identity_kind,
+        expected_executable_identity_sha256=expected_executable_identity_sha256.lower(),
     )
+    if result.get("identity_mismatch") is True:
+        return {
+            **plan,
+            **result,
+            "status": "stale_plan",
+            "error": "Executable identity changed after plan validation; obtain a fresh plan before execution",
+        }
     return {
         **plan,
         **result,

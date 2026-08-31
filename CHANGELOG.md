@@ -15,7 +15,7 @@ Production-hardening and public-release cleanup.
 - Add strict runtime MCP argument validation and request/resource bounds.
 - Remove the directly executable host-neutral MCP core path.
 - Consolidate captured external execution into a bounded streaming runner.
-- Bind plan-first capability/package/Sandbox execution to the absolute executable identity returned by the reviewed plan; changed resolution returns `stale_plan` before execution, staging, or mutation and does not become a second approval token.
+- Bind plan-first capability/package/Sandbox execution to the reviewed executable path **and typed identity fingerprint**. Regular files use SHA-256 of the exact opened file; Windows App Execution Aliases use SHA-256 of the alias reparse data. Execution re-establishes that identity and holds the verified object stable through process creation; a changed identity returns `stale_plan` before execution, staging, or mutation and does not become a second approval token.
 - Resolve runtime-owned Windows control-plane binaries such as discovery PowerShell, WSL, and Windows Sandbox from trusted Windows locations rather than PATH; Claude also binds its bootstrap PowerShell to the Windows system installation.
 
 ### Isolation
@@ -30,7 +30,8 @@ Production-hardening and public-release cleanup.
 
 ### State, security, and observability
 
-- Apply symlink/reparse containment to project-local configuration reads and Dev Container configuration detection.
+- Apply symlink/reparse containment to project-local configuration reads and Dev Container configuration detection, then consume project JSON from the same use-time verified handle rather than trusting a prior path check.
+- Revalidate Windows Sandbox payload paths, entry/byte budgets, and opened file/directory identities while staging so a post-validation junction/symlink swap cannot redirect WDA-owned copies.
 - Make discovery failures return the canonical snapshot shape.
 - Add bounded atomic discovery cache writes, a Windows interprocess cache lock, and mutation-generation protection against stale cache resurrection.
 - Fail package-install execution closed when the cache mutation/invalidation transition cannot be established before launch.

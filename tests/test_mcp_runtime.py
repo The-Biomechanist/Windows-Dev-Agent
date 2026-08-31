@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import shutil
 
+from src.file_guard import ExecutableIdentity
 from src.mcp import server
 
 
@@ -29,6 +30,8 @@ def test_tools_list_exposes_exact_runtime_surface_and_strict_schemas():
         properties = _tool(name)["inputSchema"]["properties"]
         assert "user_approved" not in properties
         assert "expected_executable" in properties
+        assert "expected_executable_identity_kind" in properties
+        assert "expected_executable_identity_sha256" in properties
     assert "isolation_requirement" in _tool("sandbox_run")["inputSchema"]["required"]
     assert not hasattr(server, "main_sync")
 
@@ -103,6 +106,8 @@ def test_capability_run_uses_explicit_project_dir(tmp_path: Path, monkeypatch):
     assert result["status"] == "planned"
     assert Path(observed["cwd"]) == tmp_path.resolve()
     assert observed["expected_executable"] is None
+    assert observed["expected_executable_identity_kind"] is None
+    assert observed["expected_executable_identity_sha256"] is None
     assert "user_approved" not in observed
 
 
@@ -132,8 +137,10 @@ def test_package_search_executes_the_exact_resolved_binary(monkeypatch):
 def test_package_install_invalidates_cache_generation_before_execution(tmp_path: Path, monkeypatch):
     observed = {}
     trusted = "C:\\trusted\\winget.exe"
+    identity = ExecutableIdentity(kind="file", sha256="b" * 64)
     monkeypatch.setattr(server, "DATA_DIR", tmp_path)
     monkeypatch.setattr(server, "resolve_executable", lambda _name: trusted)
+    monkeypatch.setattr(server, "executable_identity", lambda _path: identity)
     monkeypatch.setattr(server, "executable_identity_matches", lambda expected, actual: expected == actual)
     monkeypatch.setattr(server, "invalidate_environment_cache", lambda data_dir: observed.setdefault("invalidated", data_dir) is not None)
 
@@ -144,7 +151,14 @@ def test_package_install_invalidates_cache_generation_before_execution(tmp_path:
     monkeypatch.setattr(server, "run_bounded", fake_run)
     result = run(
         server.handle_package_install(
-            {"package_id": "Python.Python.3.12", "source": "winget", "execute": True, "expected_executable": trusted}
+            {
+                "package_id": "Python.Python.3.12",
+                "source": "winget",
+                "execute": True,
+                "expected_executable": trusted,
+                "expected_executable_identity_kind": identity.kind,
+                "expected_executable_identity_sha256": identity.sha256,
+            }
         )
     )
     assert result["status"] == "completed"
@@ -154,19 +168,25 @@ def test_package_install_invalidates_cache_generation_before_execution(tmp_path:
 
 def test_package_install_plan_never_executes_or_invalidates(monkeypatch):
     trusted = "C:\\trusted\\winget.exe"
+    identity = ExecutableIdentity(kind="file", sha256="c" * 64)
     monkeypatch.setattr(server, "resolve_executable", lambda _name: trusted)
+    monkeypatch.setattr(server, "executable_identity", lambda _path: identity)
     monkeypatch.setattr(server, "invalidate_environment_cache", lambda _data_dir: (_ for _ in ()).throw(AssertionError("plan must not invalidate")))
     monkeypatch.setattr(server, "run_bounded", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plan must not execute")))
     result = run(server.handle_package_install({"package_id": "Python.Python.3.12", "source": "winget", "execute": False}))
     assert result["status"] == "planned"
     assert result["requires_host_approval"] is True
     assert result["executable"] == trusted
+    assert result["executable_identity_kind"] == identity.kind
+    assert result["executable_identity_sha256"] == identity.sha256
     assert result["argv"][0] == trusted
 
 
 def test_plan_first_execution_refuses_missing_or_changed_executable_identity(tmp_path: Path, monkeypatch):
     trusted = "C:\\Windows\\System32\\wsl.exe"
+    identity = ExecutableIdentity(kind="file", sha256="d" * 64)
     monkeypatch.setattr(server, "_wsl_executable", lambda: trusted)
+    monkeypatch.setattr(server, "executable_identity", lambda _path: identity)
     monkeypatch.setattr(server, "executable_identity_matches", lambda expected, actual: expected == actual)
     monkeypatch.setattr(server, "run_bounded", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stale plan must not execute")))
 
@@ -182,7 +202,19 @@ def test_plan_first_execution_refuses_missing_or_changed_executable_identity(tmp
     assert missing["status"] == "invalid_input"
     assert missing["execution_started"] is False
 
-    stale = run(server.handle_sandbox_run({**base, "expected_executable": "C:\\other\\wsl.exe"}))
+    missing_identity = run(server.handle_sandbox_run({**base, "expected_executable": trusted}))
+    assert missing_identity["status"] == "invalid_input"
+
+    stale = run(
+        server.handle_sandbox_run(
+            {
+                **base,
+                "expected_executable": "C:\\other\\wsl.exe",
+                "expected_executable_identity_kind": identity.kind,
+                "expected_executable_identity_sha256": identity.sha256,
+            }
+        )
+    )
     assert stale["status"] == "stale_plan"
     assert stale["execution_started"] is False
 
@@ -211,7 +243,9 @@ def test_explicit_sandbox_backend_must_satisfy_requirement(tmp_path: Path, monke
 
 def test_untrusted_windows_always_requires_reachable_payload(tmp_path: Path, monkeypatch):
     trusted = "C:\\Windows\\System32\\WindowsSandbox.exe"
+    identity = ExecutableIdentity(kind="file", sha256="e" * 64)
     monkeypatch.setattr(server, "_windows_sandbox_executable", lambda: trusted)
+    monkeypatch.setattr(server, "executable_identity", lambda _path: identity)
     missing = run(
         server.handle_sandbox_run(
             {
@@ -243,6 +277,8 @@ def test_untrusted_windows_always_requires_reachable_payload(tmp_path: Path, mon
     assert planned["status"] == "planned"
     assert planned["environment"] == "windows_sandbox"
     assert planned["executable"] == trusted
+    assert planned["executable_identity_kind"] == identity.kind
+    assert planned["executable_identity_sha256"] == identity.sha256
 
 
 def test_payload_rejects_workspace_escape_and_overlapping_roots(tmp_path: Path):
@@ -275,7 +311,7 @@ def test_windows_sandbox_config_is_outside_share_and_disables_exposure(tmp_path:
     monkeypatch.setattr(server, "DATA_DIR", data_dir)
     sources, error = server._payload_sources(workspace, ["artifact.bin"])
     assert error is None
-    bundle_root, config, argv = server._prepare_windows_sandbox("type artifact.bin", sources, trusted)
+    bundle_root, config, argv = server._prepare_windows_sandbox("type artifact.bin", workspace, sources, trusted)
     try:
         share = bundle_root / "share"
         staged = share / "payload" / "artifact.bin"
@@ -316,12 +352,12 @@ def test_failed_sandbox_staging_removes_partial_bundle(tmp_path: Path, monkeypat
         return str(staging)
 
     monkeypatch.setattr(server.tempfile, "mkdtemp", fake_mkdtemp)
-    monkeypatch.setattr(server.shutil, "copy2", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("copy failed")))
+    monkeypatch.setattr(server, "guarded_open_read", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read failed")))
     sources, error = server._payload_sources(workspace, ["artifact.bin"])
     assert error is None
     try:
-        server._prepare_windows_sandbox("type artifact.bin", sources, trusted)
-    except OSError:
+        server._prepare_windows_sandbox("type artifact.bin", workspace, sources, trusted)
+    except RuntimeError:
         pass
     else:
         raise AssertionError("staging failure was not surfaced")
@@ -330,7 +366,9 @@ def test_failed_sandbox_staging_removes_partial_bundle(tmp_path: Path, monkeypat
 
 def test_wsl_route_uses_windows_owned_identity_and_project_cd(tmp_path: Path, monkeypatch):
     trusted_wsl = "C:\\Windows\\System32\\wsl.exe"
+    identity = ExecutableIdentity(kind="file", sha256="f" * 64)
     monkeypatch.setattr(server, "_wsl_executable", lambda: trusted_wsl)
+    monkeypatch.setattr(server, "executable_identity", lambda _path: identity)
     result = run(
         server.handle_sandbox_run(
             {
@@ -344,13 +382,17 @@ def test_wsl_route_uses_windows_owned_identity_and_project_cd(tmp_path: Path, mo
         )
     )
     assert result["executable"] == trusted_wsl
+    assert result["executable_identity_kind"] == identity.kind
+    assert result["executable_identity_sha256"] == identity.sha256
     assert result["argv"][:4] == [trusted_wsl, "--cd", str(tmp_path.resolve()), "--"]
     assert result["argv"][4:6] == ["sh", "-lc"]
 
 
 def test_captured_sandbox_spawn_failure_is_not_reported_as_started(tmp_path: Path, monkeypatch):
     trusted_wsl = "C:\\Windows\\System32\\wsl.exe"
+    identity = ExecutableIdentity(kind="file", sha256="1" * 64)
     monkeypatch.setattr(server, "_wsl_executable", lambda: trusted_wsl)
+    monkeypatch.setattr(server, "executable_identity", lambda _path: identity)
     monkeypatch.setattr(server, "executable_identity_matches", lambda expected, actual: expected == actual)
     monkeypatch.setattr(
         server,
@@ -367,6 +409,8 @@ def test_captured_sandbox_spawn_failure_is_not_reported_as_started(tmp_path: Pat
                 "payload_paths": [],
                 "execute": True,
                 "expected_executable": trusted_wsl,
+                "expected_executable_identity_kind": identity.kind,
+                "expected_executable_identity_sha256": identity.sha256,
             }
         )
     )
