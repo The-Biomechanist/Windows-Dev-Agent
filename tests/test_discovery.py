@@ -3,10 +3,9 @@
 import json
 from datetime import datetime
 from pathlib import Path
-import subprocess
-from unittest.mock import MagicMock, patch
 
-from src.discovery.discovery import EnvironmentDiscovery
+from src.discovery import discovery as discovery_module
+from src.discovery.discovery import EnvironmentDiscovery, invalidate_environment_cache
 from src.models.environment import (
     DevDrive,
     DevelopmentTools,
@@ -71,6 +70,28 @@ MOCK_DISCOVERY_OUTPUT = {
 }
 
 
+def _result(*, returncode=0, stdout=None, stderr="", timed_out=False, started=True):
+    value = {
+        "succeeded": returncode == 0 and not timed_out,
+        "returncode": returncode,
+        "stdout": json.dumps(MOCK_DISCOVERY_OUTPUT) if stdout is None else stdout,
+        "stderr": stderr,
+        "execution_started": started,
+        "output_capture_complete": started and not timed_out,
+        "output_capture_settled": started,
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+    }
+    if timed_out:
+        value["timed_out"] = True
+    return value
+
+
+def _patch_native_probe(monkeypatch, result):
+    monkeypatch.setattr(discovery_module, "_system_powershell", lambda: Path("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"))
+    monkeypatch.setattr(discovery_module, "run_bounded", lambda *_args, **_kwargs: result)
+
+
 def test_availability_state_is_tri_state():
     assert availability_state(True) == "available"
     assert availability_state(False) == "missing"
@@ -118,9 +139,8 @@ def test_snapshot_roundtrip_is_lossless_for_canonical_fields():
     assert restored.git.version == "git version 2.45"
 
 
-@patch("src.discovery.discovery.subprocess.run")
-def test_parse_valid_partial_output_preserves_unknown(mock_run, tmp_path: Path):
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(MOCK_DISCOVERY_OUTPUT), stderr="")
+def test_parse_valid_partial_output_preserves_unknown(monkeypatch, tmp_path: Path):
+    _patch_native_probe(monkeypatch, _result())
     snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
     assert snapshot.success is False
     assert snapshot.virtualization.hyper_v_available is None
@@ -129,55 +149,75 @@ def test_parse_valid_partial_output_preserves_unknown(mock_run, tmp_path: Path):
     assert snapshot.git.version == "git version 2.45.0"
 
 
-@patch("src.discovery.discovery.subprocess.run")
-def test_cache_uses_same_canonical_snapshot_schema(mock_run, tmp_path: Path):
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(MOCK_DISCOVERY_OUTPUT), stderr="")
+def test_cache_uses_same_canonical_snapshot_schema(monkeypatch, tmp_path: Path):
+    calls = []
+    monkeypatch.setattr(discovery_module, "_system_powershell", lambda: Path("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"))
+    monkeypatch.setattr(discovery_module, "run_bounded", lambda *_args, **_kwargs: calls.append(1) or _result())
     discovery = EnvironmentDiscovery(cache_enabled=True, data_dir=tmp_path)
     first = discovery.discover()
     assert discovery.cache_file.is_file()
     cached_json = json.loads(discovery.cache_file.read_text(encoding="utf-8"))
     assert cached_json == first.to_dict()
-    mock_run.reset_mock()
     second = discovery.discover()
-    mock_run.assert_not_called()
+    assert calls == [1]
     assert second.to_dict() == first.to_dict()
 
 
-@patch("src.discovery.discovery.subprocess.run")
-def test_force_refresh_runs_discovery_again(mock_run, tmp_path: Path):
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(MOCK_DISCOVERY_OUTPUT), stderr="")
+def test_force_refresh_runs_discovery_again(monkeypatch, tmp_path: Path):
+    calls = []
+    monkeypatch.setattr(discovery_module, "_system_powershell", lambda: Path("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"))
+    monkeypatch.setattr(discovery_module, "run_bounded", lambda *_args, **_kwargs: calls.append(1) or _result())
     discovery = EnvironmentDiscovery(cache_enabled=True, data_dir=tmp_path)
     discovery.discover()
-    mock_run.reset_mock()
     discovery.discover(force_refresh=True)
-    assert mock_run.called
+    assert calls == [1, 1]
 
 
-@patch("src.discovery.discovery.subprocess.run")
-def test_nonzero_process_marks_parseable_snapshot_degraded(mock_run, tmp_path: Path):
+def test_nonzero_process_marks_parseable_snapshot_degraded(monkeypatch, tmp_path: Path):
     good = dict(MOCK_DISCOVERY_OUTPUT)
     good["success"] = True
     good["errors"] = []
-    mock_run.return_value = MagicMock(returncode=5, stdout=json.dumps(good), stderr="probe process failed")
+    _patch_native_probe(monkeypatch, _result(returncode=5, stdout=json.dumps(good), stderr="probe process failed"))
     snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
     assert snapshot.success is False
     assert any("exited with code 5" in error for error in snapshot.errors)
 
 
-@patch("src.discovery.discovery.subprocess.run")
-def test_invalid_json_returns_degraded_fallback(mock_run, tmp_path: Path):
-    mock_run.return_value = MagicMock(returncode=1, stdout="not-json", stderr="bad")
+def test_invalid_json_returns_degraded_fallback(monkeypatch, tmp_path: Path):
+    _patch_native_probe(monkeypatch, _result(returncode=1, stdout="not-json", stderr="bad"))
     snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
     assert snapshot.success is False
     assert snapshot.virtualization.windows_sandbox_available is None
 
 
-@patch("src.discovery.discovery.subprocess.run")
-def test_timeout_returns_canonical_degraded_snapshot(mock_run, tmp_path: Path):
-    mock_run.side_effect = subprocess.TimeoutExpired("powershell", 30)
+def test_timeout_returns_canonical_degraded_snapshot(monkeypatch, tmp_path: Path):
+    _patch_native_probe(monkeypatch, _result(returncode=None, stdout="", timed_out=True))
     snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
     payload = snapshot.to_dict()
     assert snapshot.success is False
     assert any("timed out" in error for error in snapshot.errors)
     assert payload["probe_states"]["wsl"] == "unknown"
     assert payload["probe_states"]["windows_sandbox"] == "unknown"
+
+
+def test_cache_load_rejects_oversized_file(monkeypatch, tmp_path: Path):
+    discovery = EnvironmentDiscovery(cache_enabled=True, data_dir=tmp_path)
+    discovery.cache_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(discovery_module, "MAX_CACHE_BYTES", 8)
+    discovery.cache_file.write_bytes(b"{" + b"x" * 20 + b"}")
+    assert discovery._load_cache() is None
+
+
+def test_generation_change_prevents_stale_discovery_from_resurrecting_cache(monkeypatch, tmp_path: Path):
+    discovery = EnvironmentDiscovery(cache_enabled=True, data_dir=tmp_path)
+    snapshot = EnvironmentSnapshot(timestamp=datetime.now(), success=False, errors=["stale"])
+
+    def run_and_mutate():
+        assert invalidate_environment_cache(tmp_path) is True
+        return snapshot
+
+    monkeypatch.setattr(discovery, "_run_discovery", run_and_mutate)
+    result = discovery.discover(force_refresh=True)
+    assert result is snapshot
+    assert not discovery.cache_file.exists()
+    assert discovery.generation_file.exists()

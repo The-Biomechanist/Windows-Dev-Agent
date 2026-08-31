@@ -24,8 +24,8 @@ if str(ROOT) not in sys.path:
 
 from src.observability.trace import append_event, resolve_log_file
 from src.runtime_paths import resolve_codex_data_dir
-from src.safety.codex_gate import _shared_tool_name
-from src.safety.gate import classify_tool_call
+from src.safety.codex_gate import _project_scope_error, _shared_tool_name
+from src.safety.classifier import classify_tool_call
 
 PREFIX = "mcp__windows_dev_agent__"
 NONPROJECT_PLAN_TOOLS = {PREFIX + "package_install"}
@@ -35,34 +35,16 @@ PROJECT_PLAN_ARGS = {
 }
 
 
-def _inside_session_cwd(event: dict[str, Any], tool_input: dict[str, Any], argument: str) -> bool:
-    """Prove an absolute caller path resolves no broader than Codex's active cwd."""
-    session_cwd = str(event.get("cwd", "")).strip()
-    requested = str(tool_input.get(argument, "")).strip()
-    if not session_cwd or not requested:
-        return False
-    try:
-        root = Path(session_cwd).expanduser().resolve()
-        requested_path = Path(requested).expanduser()
-        if not requested_path.is_absolute():
-            return False
-        candidate = requested_path.resolve()
-        candidate.relative_to(root)
-        return True
-    except (OSError, RuntimeError, ValueError):
-        return False
-
-
 def _safe_plan_request(event: dict[str, Any], tool_name: str, tool_input: dict[str, Any]) -> bool:
     if tool_name in NONPROJECT_PLAN_TOOLS:
-        return not bool(tool_input.get("execute", False))
+        return tool_input.get("execute") is not True
 
     project_arg = PROJECT_PLAN_ARGS.get(tool_name)
     if project_arg is None:
         return False
-    if tool_name.endswith("capability_run") and bool(tool_input.get("execute", False)):
+    if tool_name.endswith("capability_run") and tool_input.get("execute") is True:
         return False
-    return _inside_session_cwd(event, tool_input, project_arg)
+    return _project_scope_error(event, tool_name, tool_input) is None
 
 
 def evaluate_permission_request(event: dict[str, Any], *, log_file: Optional[Path] = None) -> Optional[dict[str, Any]]:

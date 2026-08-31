@@ -1,0 +1,72 @@
+# Changelog
+
+All notable Windows Dev Agent changes are recorded here. The repository uses semantic versioning for public plugin/runtime releases.
+
+## 0.5.0 — Unreleased
+
+Production-hardening and public-release cleanup.
+
+### Runtime and bootstrap
+
+- Raise the supported Python floor to 3.11.
+- Add an isolated Windows-native Python launcher that avoids project/PATH executable shadowing, supports an explicit absolute host override, and runs correctly under Windows PowerShell 5.1.
+- Root Codex hook bootstrap PowerShell at `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` so hooks executed from the active project directory cannot resolve a project-local `powershell.exe`; preserve the quote-free command form required by Codex's current Windows hook transport. Trusted Codex `PreToolUse` hooks also bind every project-scoped WDA call to the host event `cwd`; without trusted hooks the explicit absolute project argument remains caller-selected and prompt-gated rather than being misrepresented as host-attested scope.
+- Remove ambient/project-current-directory import dependence: Claude launches from the plugin root explicitly, while Codex uses its plugin-owned startup directory only to resolve the bundled launcher and never as project identity.
+- Consolidate Claude and Codex onto one bounded stdio transport.
+- Add strict runtime MCP argument validation and request/resource bounds.
+- Remove the directly executable host-neutral MCP core path.
+- Consolidate captured external execution into a bounded streaming runner. Settle stdout/stderr drain threads before publishing a receipt; Windows cancels still-blocked synchronous reads after a short EOF grace period and reports clean capture completion separately from reader settlement. Clean capture now requires both reader loops to explicitly observe EOF, so a settled reader that exits on an I/O error remains incomplete. Report stdout/stderr tail truncation explicitly, and require complete, settled, non-truncated stream evidence before captured text becomes canonical discovery state, a known tool version, or host inventory. Preserve a canonical started-process receipt when post-launch lifecycle observation fails, with best-effort cleanup and `unknown` audit attribution rather than an escaped exception or invented failure outcome.
+- Bind plan-first capability/package/Sandbox execution to the reviewed command-target path **and typed identity fingerprint**. Native files use SHA-256 of the exact opened file; Windows App Execution Aliases use SHA-256 of the alias reparse data; PowerShell `.ps1` targets use SHA-256 of the exact script bytes and additionally bind the Windows-owned PowerShell interpreter at launch. `.cmd`/`.bat` are not executable targets, avoiding implicit `cmd.exe` argument parsing. A changed reviewed identity returns `stale_plan` before execution, staging, or mutation and does not become a second approval token.
+- Self-seal non-plan subprocesses at use time too: diagnostic/search/inventory launches snapshot the current typed executable identity and hold that exact object through process creation, closing the absolute-path resolve-to-spawn replacement window without adding plan ceremony.
+- Remove Windows current-directory executable authority from ordinary tool resolution. Bare tool names are resolved from absolute inherited `PATH` entries with cwd/empty/relative entries excluded, avoiding Python 3.11's unconditional cwd-first `shutil.which()` behavior and the conditional cwd-first behavior in newer Python releases. Broad PowerShell discovery applies the same search-authority policy and asks `Get-Command -CommandType Application`, so aliases/functions/cmdlets/scripts are not misreported as installed executable tools.
+- Resolve runtime-owned Windows control-plane binaries such as discovery PowerShell, WSL, and Windows Sandbox from trusted Windows locations rather than PATH; Claude also binds its bootstrap PowerShell to the Windows system installation.
+- Make WSL discovery Store/inbox agnostic: distinguish control-plane installation from usable routing, honor global WSL, Inbox WSL, and WSL1 machine policy, read the current user's native WSL distribution registration, and require a valid default distribution before advertising `linux_compatibility`.
+
+### Isolation
+
+- Require an explicit semantic isolation requirement for every `sandbox_run` call.
+- Reject explicit backend/requirement combinations that do not provide the requested property.
+- Require an actual `.devcontainer/devcontainer.json` or root `.devcontainer.json` before treating a project as Dev Container-configured.
+- Require payload staging for every `untrusted_windows` request.
+- Disable vGPU, networking, audio input, video input, printer redirection, and clipboard redirection for the hostile-Windows route.
+- Keep generated `.wsb` configuration outside the mapped read-only Sandbox share.
+- Make WDA own Sandbox bundle cleanup responsibility with best-effort process-exit cleanup plus stale-bundle collection at host startup and before later Sandbox launches.
+
+### State, security, and observability
+
+- Apply symlink/reparse containment to project-local configuration reads and Dev Container configuration detection, then consume project JSON from the same use-time verified handle rather than trusting a prior path check.
+- Revalidate Windows Sandbox payload paths, entry/byte budgets, and opened file/directory identities while staging so a post-validation junction/symlink swap cannot redirect WDA-owned copies.
+- Replace Dev Drive volume-label inference with the native `FSCTL_QUERY_PERSISTENT_VOLUME_STATE` / `PERSISTENT_VOLUME_STATE_DEV_VOLUME` filesystem identity and preserve whether the inventory was actually established.
+- Make discovery failures return the canonical snapshot shape.
+- Add bounded atomic discovery cache writes, a Windows interprocess cache lock, and mutation-generation protection against stale cache resurrection. Cache admission/publication now fails closed when generation authority is unreadable or malformed instead of letting sentinel text behave like a matching generation token; a missing generation file remains the valid first-run baseline.
+- Fail package-install execution closed when the cache mutation/invalidation transition cannot be established before launch.
+- Serialize audit rotation/append between Windows hook processes.
+- Make session/persistent audit summaries best-effort across retained log segments: a rotated predecessor that disappears or becomes unreadable after enumeration is skipped while remaining readable evidence is preserved, so Stop-time reporting does not become an execution blocker.
+- Bring Codex PostToolUse accounting to parity with Claude by persisting the same derived `execution_started` fact and reporting the per-session external-process start count without retaining raw tool responses.
+- Add audit schema version and explicit lifecycle fields while preserving legacy log readability.
+- Classify rejected `stale_plan` requests as `not_executed`, distinct from runtime execution failure.
+- Stop exposing the physical WDA data directory from `logs_query`.
+- Separate host-neutral safety classification from Claude's hook adapter.
+
+### Cleanup and release
+
+- Rename `capabilities.yaml` to the format-accurate `capabilities.json`.
+- Remove legacy command aliases, the duplicate Windows orchestrator agent, unused APM metadata, empty runtime requirements metadata, unused runtime-path helpers, and release-history naming residue from tests.
+- Rewrite public documentation around installation, capabilities, boundaries, limitations, and development.
+- Add `SECURITY.md`.
+- Update Windows CI to test Python 3.11 and 3.14, exercise the Windows PowerShell 5.1 bootstrap, and verify immutable published release ancestry without freezing later development to the last payload.
+
+## 0.4.3
+
+Runtime authority repair release.
+
+- Bound Claude project-scoped calls to the host-supplied project root.
+- Required authoritative Codex session scope for trusted plan shortcuts.
+- Preserved unknown external-process outcomes instead of collapsing them into failure.
+- Kept discovery failure responses in the canonical degraded snapshot shape.
+- Made WinGet installs noninteractive and source-bound.
+- Published the Codex marketplace entry as an index-only commit pinned to an immutable index-free payload commit.
+
+## 0.4.2
+
+Runtime-integrity release that established the shared Claude/Codex architecture, retained-history audit model, executable-identity checks, and Windows NTFS/reparse containment foundations used by later hardening.

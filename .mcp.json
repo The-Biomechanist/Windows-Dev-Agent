@@ -1,9 +1,17 @@
 {
   "mcpServers": {
     "windows-dev-agent": {
-      "command": "python",
-      "args": ["-m", "src.claude_server"],
-      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "command": "${SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${CLAUDE_PLUGIN_ROOT}/scripts/launch-python.ps1",
+        "-Module",
+        "src.claude_server"
+      ],
       "env": {
         "WINDOWS_DEV_AGENT_DATA_DIR": "${CLAUDE_PLUGIN_DATA}",
         "WINDOWS_DEV_AGENT_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"

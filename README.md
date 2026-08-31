@@ -1,223 +1,219 @@
 # Windows Dev Agent
 
-Windows-native developer orchestration for **Claude Code and Codex**, built around one shared runtime and six shared procedural skills.
+Windows-native development orchestration for **Claude Code and Codex**.
 
-Version **0.4.3** builds on 0.4.2 and closes host/runtime authority and outcome seams: Claude project-scoped tools are contained to the host-supplied project root, Codex plan shortcuts require authoritative session scope, Codex's MCP timeout covers the runtime execution ceiling, discovery failures remain canonical degraded snapshots, external-process audit outcomes preserve uncertainty, and WinGet installs are noninteractive and bound to the reviewed source.
+Windows Dev Agent (WDA) gives an agent a small, shared runtime for inspecting a Windows development environment, routing project work, resolving and installing system packages, choosing an appropriate isolation boundary, and auditing the resulting actions without turning host permission into a model-controlled flag.
 
-## Architecture
+The runtime is local, Python-standard-library-only, and designed around explicit Windows authority boundaries: the host owns permission, project scope comes from the host adapter, external effects are not inferred from requests, and unavailable or unobserved state remains unknown rather than being guessed.
 
-```text
-shared core
-  skills/
-  capabilities.yaml
-  src/mcp/server.py
-  src/capabilities.py
-  src/discovery/
-  src/models/environment.py
-  src/observability/
-  src/safety/gate.py
-        │
-        ├── Claude Code adapter
-        │     .claude-plugin/plugin.json
-        │     .mcp.json
-        │     src/claude_server.py
-        │     agents/  commands/  hooks/hooks.json
-        │
-        └── Codex adapter
-              .codex-plugin/plugin.json
-              .mcp.codex.json
-              src/codex_server.py
-              hooks/codex-hooks.json
-              src/safety/codex_*.py
-              src/observability/codex_*.py
-```
+## What it adds
 
-Host adapters own only packaging, path binding, permission integration, and host hook contracts. Windows behavior and reusable procedures stay shared.
-
-## Shared skills
-
-| Skill | Purpose |
-| --- | --- |
-| `env-inspect` | Inspect Windows host, runtime, toolchain, package-manager, and isolation state without collapsing unknown probes into absence. |
-| `workflow-plan` | Build a bounded Windows-aware plan when dependencies or uncertainty can change the route. |
-| `package-install` | Resolve exact package identity, review the concrete mutation, execute under host permission, and verify fresh state. |
-| `sandbox-run` | Select WSL, a project Dev Container, or Windows Sandbox from the required execution property. |
-| `win-setup` | Repair missing or broken Windows development prerequisites with the smallest native change. |
-| `ecosystem-defrag` | Inventory concrete agent/tool overlap and plan or execute a reversible consolidation. |
-
-Claude's `/windows-dev-agent:env`, `/windows-dev-agent:plan`, and `/windows-dev-agent:defrag` commands are thin adapters to those canonical skills. Codex consumes the same skills directly.
-
-## Install surfaces
-
-### Claude Code
-
-From a checkout:
-
-```text
-claude --plugin-dir .
-```
-
-`.mcp.json` keeps three identities separate:
-
-- `${CLAUDE_PLUGIN_ROOT}` — immutable plugin code/config;
-- `${CLAUDE_PLUGIN_DATA}` — persistent cache/audit data;
-- `${CLAUDE_PROJECT_DIR}` — active project boundary.
-
-Project-scoped Claude MCP calls are normalized to that host-supplied project root or one of its descendants. Relative project paths are interpreted under `${CLAUDE_PROJECT_DIR}`; an arbitrary sibling/outside directory is rejected.
-
-### Codex / ChatGPT desktop
-
-Canonical `main` carries `.codex-plugin/plugin.json` plus the release index at `.agents/plugins/marketplace.json`. Each published marketplace entry is pinned to an immutable Git commit rather than treating a moving `main` branch as the identity of a fixed version. The immutable plugin payload itself does not depend on carrying its own marketplace index.
-
-Codex installs plugin code into its cache, so project-scoped MCP tools require the **absolute** current project directory explicitly. Runtime cache/audit state converges on `${CODEX_HOME:-~/.codex}/plugins/data/windows-dev-agent` rather than the installed plugin tree.
-
-Bundled Codex hooks are an **optional trusted layer**. Codex does not automatically trust newly installed/changed plugin hooks; until the user reviews and trusts them, native Codex MCP/shell approval policy remains the operative boundary. Mutation-capable WDA MCP tools remain `prompt`-gated regardless.
-
-## MCP surface
-
-Both adapters expose the same ten tools:
+WDA exposes ten MCP tools through both host adapters:
 
 | Tool | Purpose |
 | --- | --- |
-| `env_inspect` | Native Windows environment snapshot with time-bound cache and `force_refresh`. |
-| `tool_discover` | Focused executable/version discovery. |
-| `capability_run` | Plan or execute one registered argv-based capability. |
-| `workflow_plan` | Deterministic capability-aware scaffold that preserves weak, tied, unavailable, and selected route states. |
-| `package_search` | Resolve package identity before mutation. |
-| `package_install` | Plan or execute one exact WinGet/Chocolatey/Scoop install. |
-| `sandbox_run` | Route and optionally launch WSL, Dev Container, or Windows Sandbox execution. |
-| `ecosystem_scan` | Project-local agent/tool inventory by default; optional broader host inventory. |
-| `logs_query` | Query bounded retained WDA audit metadata across every readable retained segment. |
-| `mcp_audit` | Inspect project MCP configuration by default; broader reads are explicit. |
+| `env_inspect` | Build a tri-state Windows environment snapshot with a bounded cache. |
+| `tool_discover` | Resolve common developer tools to exact executables and probe versions. |
+| `capability_run` | Plan or execute a registered argv-based capability. |
+| `workflow_plan` | Select a capability only when task evidence actually distinguishes one. |
+| `package_search` | Search an installed Windows package manager for an exact package identity. |
+| `package_install` | Plan or execute one exact WinGet, Chocolatey, or Scoop install. |
+| `sandbox_run` | Route execution to WSL, a project Dev Container, or Windows Sandbox from an explicit isolation requirement. |
+| `ecosystem_scan` | Inventory project agent/tool configuration, with broader host reads opt-in. |
+| `logs_query` | Query bounded retained WDA audit metadata. |
+| `mcp_audit` | Inspect project MCP configuration without returning secrets or raw command values. |
 
-## Authority model
+Six shared skills provide the procedural layer: `env-inspect`, `workflow-plan`, `package-install`, `sandbox-run`, `win-setup`, and `ecosystem-defrag`.
 
-Windows Dev Agent does **not** carry a model-controlled `user_approved` token.
+## Requirements
 
-The sequence is deliberately simple:
+- Windows 10 or Windows 11 for the native runtime.
+- Windows PowerShell 5.1 or newer.
+- **Python 3.11 or newer.** WDA does not install Python for itself.
+- A current Claude Code or Codex build with plugin/MCP support.
+- Optional backends only when you use them: WSL, the Dev Container CLI plus an actual `.devcontainer/devcontainer.json` or root `.devcontainer.json`, or Windows Sandbox.
 
-```text
-model constructs exact tool call
-→ active host applies its permission policy to that call
-→ if permitted, the same call reaches the MCP runtime
-```
+There are no third-party Python runtime dependencies. Development uses pytest.
 
-Plan-only calls use `execute: false`. Mutation calls use `execute: true`. The shared runtime independently blocks capabilities classified `forbidden`; it does not pretend to prove that the host prompt occurred.
+## Install
 
 ### Claude Code
 
-The Claude `PreToolUse` hook is tightening-only:
+For a local checkout or development build:
 
-- read-only / reversible → no WDA decision; Claude's normal policy remains authoritative;
-- approval-required / checkpoint → `ask`;
-- forbidden → `deny`;
-- it never returns `allow`.
+```text
+claude --plugin-dir /absolute/path/to/Windows-Dev-Agent
+```
 
-Project-local ecosystem/MCP inspection is classified separately from broader host reads, but Claude Code's own normal permission flow remains authoritative for both.
+Claude loads the plugin from its root for that session. The plugin uses `${CLAUDE_PLUGIN_ROOT}` for code, `${CLAUDE_PLUGIN_DATA}` for persistent WDA state, and `${CLAUDE_PROJECT_DIR}` as the project authority boundary. It does not depend on the process current directory to import the runtime.
 
 ### Codex
 
-Codex uses native MCP approval modes. Always-bounded non-filesystem reads can be `approve`; mutation-capable and filesystem-inventory tools remain `prompt`. The server-level MCP timeout is set above the runtime's 600-second execution ceiling so Codex does not terminate a legitimate long-running call before the runtime's own bound.
+Codex plugin installation is marketplace-based. With this repository configured as a marketplace, install the published plugin with:
 
-When Codex plugin hooks are trusted, `PermissionRequest` removes needless prompts only where the hook event itself proves the safe scope. `package_install(execute:false)` may be allowed as a non-executing plan. `capability_run(execute:false)` and `workflow_plan` may be allowed only when their absolute project path resolves inside the authoritative session `cwd`. `sandbox_run` planning remains on native approval because planning can enumerate payload paths. Executing calls receive no WDA allow decision and continue to normal Codex approval.
+```text
+codex plugin marketplace add The-Biomechanist/Windows-Dev-Agent
+codex plugin add windows-dev-agent@windows-dev-agent
+```
 
-`ecosystem_scan` and `mcp_audit` remain on native Codex approval even for project-only requests. Their caller-supplied `cwd` is required, but the plugin does not auto-approve those filesystem reads.
+The published marketplace entry is pinned to an immutable payload commit. Installed code is separate from `${CODEX_HOME:-~/.codex}/plugins/data/windows-dev-agent`, where WDA keeps its bounded cache and audit state.
 
-`PreToolUse` may deny a known-forbidden action but otherwise defers prompting to native Codex policy.
+Codex uses the installed plugin root as the MCP server's startup working directory so the relative launcher path resolves inside plugin code. That startup directory is **not** treated as project identity: project-scoped WDA tools still require the current absolute Codex project directory explicitly.
 
-## Environment evidence
+Codex plugin hooks are an additional trusted layer, not a replacement for native permissions. Until the user trusts those hooks, Codex's own MCP/shell approval policy remains the operative boundary. Mutation-capable WDA tools remain prompt-gated. Codex executes command hooks from the active request working directory, so WDA's Windows hook commands invoke `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` explicitly instead of resolving a bare `powershell.exe` from that project directory. The hook command line stays quote-free for compatibility with Codex's current Windows `cmd.exe /C` hook transport.
 
-Availability fields are tri-state:
+## Python bootstrap
 
-- `true` — observed present/enabled;
-- `false` — observed absent/disabled;
-- `null` — the probe did not establish the fact.
+MCP servers and hooks do not execute a bare `python` from the active project's current directory or inherited PATH.
 
-The shipped PowerShell producer uses live-image optional-feature queries (`Get-WindowsOptionalFeature -Online`). Probe failures are recorded in `snapshot.errors` and make the snapshot degraded rather than silently becoming `false`. Windows Sandbox is queried using its canonical `Containers-DisposableClientVM` optional-feature identity. If the native discovery process times out or otherwise cannot produce a parsed snapshot, `env_inspect` still returns the same canonical snapshot schema with degraded/unknown state instead of switching to an ad-hoc failure shape.
+`scripts/launch-python.ps1` resolves Python from Windows installation authorities and standard host installation locations, rejects interpreters older than 3.11, then launches the selected interpreter in isolated mode (`-I`). A managed host or CI environment may supply `WINDOWS_DEV_AGENT_PYTHON`, but it must be an **absolute `python.exe` path** and is version-checked before use. The launcher is compatible with Windows PowerShell 5.1 and does not require newer .NET path APIs.
 
-The cache stores the same canonical representation returned to consumers; it is not a second serialization format. Cache TTL is five minutes, and package-install execution invalidates the cached snapshot even on a failed installer because partial mutation is possible.
+The launcher then imports only the requested `src.*` WDA entrypoint from the plugin root. WDA never silently installs or upgrades the interpreter.
 
-Discovery intentionally does **not** persist username/domain, Git user identity, or full PowerShell module inventory. Those values are not required by the current routing consumers.
+## Permission and authority model
 
-## Package setup
+WDA does not accept a model-supplied `user_approved` bit.
 
-`package_search` is the package-identity producer. It is non-mutating by intent, but it executes the selected package manager and may contact its configured source, so the active host remains authoritative for the call. A package mutation should use an exact ID from the user/authoritative project state or resolve one through search before `package_install`.
+```text
+agent obtains/reviews concrete plan where required
+→ plan-first execution echoes the reviewed path and typed executable identity fingerprint
+→ Claude Code or Codex applies host permission policy
+→ permitted call reaches WDA
+→ WDA validates arguments and executable identity at execution boundary
+→ external result is observed separately from the request
+```
 
-`package_install(execute:false)` returns the concrete argv for review. `execute:true` requests that exact mutation under the active host permission policy. WinGet execution is explicitly bound to the `winget` source and uses `--disable-interactivity` because MCP subprocess stdin is closed; package/source agreement flags are part of the reviewed argv. Installer exit is not treated as proof that the requested task now works; verify executable/version/task state afterward.
+`execute: false` produces a plan. For `capability_run`, `package_install`, and `sandbox_run`, that plan includes the resolved absolute `executable` compatibility field plus `executable_identity_kind` and `executable_identity_sha256`; together these identify the reviewed **command target**. A later `execute: true` call must echo those as `expected_executable`, `expected_executable_identity_kind`, and `expected_executable_identity_sha256`. Native executable files are fingerprinted from the exact opened file, Windows App Execution Aliases from their `IO_REPARSE_TAG_APPEXECLINK` reparse data, and PowerShell `.ps1` command targets from their exact script bytes. PowerShell-script targets are launched only through the Windows-owned Windows PowerShell interpreter, whose identity is separately sealed at use time; `.cmd` and `.bat` are never admitted as command targets. If current target resolution or identity material no longer matches the reviewed plan, WDA returns `stale_plan` with `execution_started: false`; the caller must obtain a fresh plan rather than silently accepting the changed identity.
 
-## Workflow routing
+The expected executable path/kind/fingerprint fields are stale-plan identity preconditions, **not** approval tokens. The active host still decides whether the exact executing call is permitted. The runtime independently blocks forbidden capability classes and rejects malformed direct MCP calls even when a client skipped advertised JSON-schema validation.
 
-`workflow_plan` separates semantic route evidence from execution availability. Capability ID/tag overlap supplies deterministic routing evidence; description-only similarity and generic operation words such as `run`, `test`, `build`, and `lint` do not select a capability by themselves. Minor token forms such as `tests`/`test` are normalized without turning generic words into discriminators. Equal strongest semantic matches remain `ambiguous` even when only one backend happens to be installed. A uniquely strongest semantic match with no executable is `matched_unavailable`; it does not silently fall through to a weaker match. Existing `selection_status`, `matched_candidate`, and `selected_candidate` fields remain stable, with `route_discriminator` added when the route is unresolved.
+Claude's `PreToolUse` adapter can tighten the host decision (`ask` or `deny`) but never grants permission itself. Codex uses its native approval modes; trusted hooks may remove a prompt only for narrowly proven plan-only calls. Sandbox planning is intentionally not auto-allowed.
+
+## Project boundaries and reads
+
+Claude project-scoped tools are restricted to `${CLAUDE_PROJECT_DIR}` or a descendant. Codex requires the current absolute project directory explicitly because installed plugin code lives in a separate cache. When the bundled Codex hooks are trusted, every project-scoped call is independently checked against the host event `cwd` and an escape is denied before the MCP call runs. Without trusted hooks, Codex does not currently expose an equivalent project identity directly to the MCP server: the absolute path remains caller-selected and host-prompted, so WDA does not claim host-attested project confinement on that fallback path.
+
+Project-local configuration reads—including `.mcp.json`, `.continue/config.json`, `.vscode/extensions.json`, agent configuration markers, and Dev Container configuration detection—are checked component-by-component before use. JSON content is then consumed from a use-time opened handle whose final path is revalidated against the project boundary. A symbolic link or NTFS reparse point that would redirect a project-scoped read outside the intended tree is rejected rather than followed, including a boundary swapped after an earlier precheck.
+
+Project reproducibility requires an actual `.devcontainer/devcontainer.json` or root `.devcontainer.json`. A bare `.devcontainer/` directory is not treated as evidence that the project has a configured Dev Container.
+
+MCP audit results contain structural metadata only. Raw command strings, URLs, argument values, and environment values are not returned.
+
+## Environment discovery
+
+Availability is tri-state:
+
+- `true`: observed present/enabled;
+- `false`: observed absent/disabled;
+- `null`: not established by the probe.
+
+Native discovery is performed with Windows-owned PowerShell and returns one canonical `EnvironmentSnapshot` shape even when the probe degrades or fails unexpectedly. Broad developer-tool/runtime presence uses PowerShell `Get-Command -CommandType Application` rather than accepting aliases, functions, cmdlets, or scripts; WDA first removes process-cwd, empty, and relative PATH entries so the discovery fact uses the same explicit executable-authority policy as execution. WSL discovery treats the legacy inbox optional component as only one possible implementation: Store WSL, native service registration, global/Inbox/WSL1 machine policy, and the current user's registered distributions are evaluated separately. `wsl_installed` records control-plane installation, while `wsl_available` requires policy permission plus a registered default distribution that WDA can actually target for `linux_compatibility`. Dev Drive inventory is established from the filesystem's `PERSISTENT_VOLUME_STATE_DEV_VOLUME` flag through `FSCTL_QUERY_PERSISTENT_VOLUME_STATE`; a user-chosen volume label is not treated as Dev Drive identity.
+
+The cache uses the same canonical snapshot representation, is capped at 1 MiB, written atomically, and expires after five minutes. Cache admission now requires an established mutation-generation token before any existing snapshot is read: an absent generation file is the valid initial baseline, while unreadable, malformed, oversized, or non-ASCII generation state disables cache use and publication for that discovery. Package-install execution must first advance the cache mutation generation and invalidate the prior snapshot; if that authority transition cannot be established, the installer is not started. A discovery that began against an older generation—or loses generation authority before publication—cannot later resurrect a stale cache entry.
+
+## Package execution
+
+WDA resolves the selected package-manager command target into an absolute path and typed identity for the plan. `package_install(execute:false)` returns `executable`, `executable_identity_kind`, and `executable_identity_sha256` with the exact target argv for review. An executing call must pass all three back through their `expected_*` fields; WDA re-resolves and re-fingerprints the current package-manager target and refuses to launch with `stale_plan` if it no longer matches. The bounded runner then holds the verified native file, App Execution Alias, or PowerShell script target stable through process creation; script targets also bind the Windows-owned PowerShell interpreter. There is no third PATH lookup, implicit `cmd.exe` batch path, or unguarded check-to-launch gap.
+
+`package_search` can contact the package manager's configured source and therefore remains host-controlled even though it is non-mutating by intent. A zero-exit search whose stdout capture was incomplete or truncated returns `status: incomplete` rather than presenting the retained tail as a complete result. WinGet installation is bound to the `winget` source and runs non-interactively.
+
+Installer exit status is not proof that the requested development task now works. Re-inspect or verify the actual post-state that matters.
+
+## Process execution
+
+All captured subprocess execution goes through one bounded runner. It:
+
+- requires an absolute typed command-target path;
+- on Windows, resolves ordinary bare tool names only from absolute inherited `PATH` entries, explicitly excluding the process current directory, empty/relative PATH entries, and relative command paths before identity sealing; native `.exe`/`.com` targets are preferred, `.ps1` shims are supported through Windows-owned PowerShell, and `.cmd`/`.bat` targets are rejected;
+- snapshots the current typed command-target identity for ordinary probes and holds that exact native file, App Execution Alias, or PowerShell script through process creation;
+- for plan-first execution, additionally requires the earlier reviewed typed identity fingerprint to match before launch;
+- disconnects child stdin from the MCP transport;
+- streams stdout/stderr while retaining only bounded tails in memory; `output_capture_complete` is true only when both drain loops explicitly observed EOF (a reader that exits on I/O error is settled but incomplete), `output_capture_settled` records that no reader remains active, and `stdout_truncated` / `stderr_truncated` record discarded earlier bytes; consumers that derive facts from captured text require the relevant stream to be complete, settled, and non-truncated;
+- on Windows, cancels still-blocked synchronous drain reads after a short post-process grace period rather than returning with live reader threads; forced cancellation is settled but not reported as complete capture;
+- applies a runtime timeout;
+- if process lifecycle observation fails after a witnessed start, attempts bounded cleanup and returns a `lifecycle_error` receipt instead of throwing away the started-process evidence; a later successful poll may recover the exit status without manufacturing an error;
+- preserves whether execution actually started;
+- attempts process-tree termination on Windows after timeout.
+
+Every captured external launch therefore closes the resolve-to-spawn same-path replacement window. Plan-first execution adds the stronger cross-call check: reviewed path and typed identity material are checked before mutation/staging/launch, then that verified object is held through process creation. A stale reviewed plan is `not_executed`, not an execution failure.
+
+Timeout or unrecovered lifecycle-observation failure after launch is not treated as proof of failure-with-no-effect: partial external mutation may already have occurred, so audit state remains `unknown`.
 
 ## Isolation
 
-`environment:auto` requires an `isolation_requirement`:
+Every `sandbox_run` call names the property it requires:
 
-- `linux_compatibility` → WSL;
-- `project_reproducibility` → configured project Dev Container;
-- `untrusted_windows` → Windows Sandbox.
+| Requirement | Backend |
+| --- | --- |
+| `linux_compatibility` | WSL |
+| `project_reproducibility` | configured project Dev Container |
+| `untrusted_windows` | Windows Sandbox |
 
-WSL enters the active project using `wsl --cd <project>` and uses `sh -lc` by default. WSL accepts an absolute Windows path for `--cd`, so no guessed `/mnt/<drive>` translation is required. Dev Container execution uses the project configuration and `sh -lc`.
+`environment:auto` chooses the backend dictated by that property. If the caller names an explicit backend that does not satisfy the requirement, WDA rejects the request instead of silently weakening the boundary. The WSL route requires the Windows-owned `wsl.exe`, machine policy that permits WSL, and a valid registered default distribution under the current user's native WSL registration; `wsl.exe` presence alone is not treated as Linux execution availability. `sandbox_run(execute:false)` also returns the absolute backend `executable` plus its identity kind and SHA-256 fingerprint; execution must echo all three through the matching `expected_*` fields so a changed backend identity invalidates the plan before staging or launch.
 
-### Windows Sandbox payloads
+### Windows Sandbox
 
-A hostile Windows workload is not isolated merely because a Sandbox window launches. For `untrusted_windows`, supply workspace-relative `payload_paths` identifying the files/directories the inner command actually needs. The runtime:
+For `untrusted_windows`, `payload_paths` is mandatory whether routing is automatic or explicit. Paths must be workspace-relative ordinary files/directories. Nomination rejects escapes, symbolic links, NTFS reparse points, overlapping roots, more than 10,000 filesystem entries, or more than 1 GiB of files. Staging re-establishes the directory/file identities and budgets while copying from verified handles, so a payload swapped to a junction/reparse target or enlarged after nomination is rejected rather than copied.
 
-1. rejects absolute paths, `..` escapes, missing paths, symbolic links, NTFS reparse/junction boundaries, overlapping selections, payloads over 10,000 filesystem entries, and payloads over 1 GiB total file bytes;
-2. checks every selected path component before resolution, so a reparse parent cannot be crossed merely because its eventual target remains inside the workspace;
-3. fails closed when reparse metadata cannot be established;
-4. stages the selected payload into a temporary bundle;
-5. maps only that generated bundle into Windows Sandbox, read-only;
-6. disables Sandbox networking and clipboard;
-7. runs the inner command from `C:\WDAShare\payload`.
+Only the generated payload share is mapped into Windows Sandbox and it is read-only. The generated `.wsb` configuration remains outside that mapped share. Host-facing settings are hardened for this route:
 
-Planning does not materialize the bundle. An executing Sandbox call returns `launched` plus `cleanup_path`; that establishes launch only. Inner command success remains unknown until observed from inside the Sandbox. If staging or process launch fails before the Sandbox starts, the partial temporary bundle is removed automatically.
+```xml
+<vGPU>Disable</vGPU>
+<Networking>Disable</Networking>
+<AudioInput>Disable</AudioInput>
+<VideoInput>Disable</VideoInput>
+<PrinterRedirection>Disable</PrinterRedirection>
+<ClipboardRedirection>Disable</ClipboardRedirection>
+```
 
-## Ecosystem and MCP reads
+WDA owns cleanup responsibility for its temporary Sandbox bundles. It performs best-effort cleanup after the launched Sandbox process exits when that process lifetime is usable as a cleanup witness, and it also runs stale-bundle collection at host startup and before later Sandbox launches. Callers are not given a host cleanup path to remember.
 
-`ecosystem_scan` starts project-local. Set `include_host:true` only when user-level extensions/plugins/MCP state can change the decision. `include_packages:true` is legal only with host inventory enabled.
+A returned `launched` status proves only that Windows Sandbox was launched. It does not establish the inner command's success or that the launched process handle is a universal Windows Sandbox session-lifetime oracle.
 
-`mcp_audit` likewise starts from the project boundary. User-level MCP configuration and arbitrary `config_path` reads are explicit broader requests.
+## Audit and privacy
 
-Returned MCP summaries expose only structural metadata: server name, validity, transport kind, argument count, and whether command/URL/environment fields are present. Raw command strings, URLs, argument values, and environment values are not returned. JSON config reads are capped at 2 MiB per file. On Codex, filesystem inventory reads remain on native approval even when the supplied path is project-local.
+WDA persists only bounded control metadata needed by its audit/cache consumers plus WDA-owned temporary Sandbox staging. It does **not** retain raw commands, MCP arguments, stdout/stderr, or arbitrary tool responses in the audit log.
 
-## Audit state and retention
+Persistent control files can include the environment snapshot, small cache generation/lock metadata, the bounded audit log plus its lock/rotated predecessor, and temporary Sandbox bundles awaiting best-effort or stale cleanup.
 
-WDA persists only metadata its audit consumers need; raw commands, MCP arguments, stdout/stderr, and arbitrary tool responses are not retained.
+New audit records carry a schema version plus explicit lifecycle fields. Legacy retained records remain readable. Rotate-and-append is serialized between independent Windows hook processes so concurrent Claude/Codex hooks cannot race log rotation.
 
-For execution-capable calls, the audit representation distinguishes:
+Execution outcomes distinguish `succeeded`, `failed`, `unknown`, `not_executed`, and `not_applicable`. Lifecycle success and external-effect success are separate facts. A rejected `stale_plan` is recorded as `not_executed`.
 
-- `succeeded` — result establishes successful execution;
-- `failed` — result establishes failed execution;
-- `unknown` — execution may have started or occurred, but the available observation does not establish the effect;
-- `not_executed` — plan/block/unavailable/invalid input or a pre-launch failure prevented execution;
-- `not_applicable` — the lifecycle event has no execution outcome to classify, including permission/control events.
+`agent.log` is bounded to 2 MiB plus one rotated predecessor. `logs_query` returns audit events and counts without exposing the physical user-home/plugin-data path.
 
-Hook lifecycle and execution outcome are deliberately separate. A `PostToolUseFailure` without a result does not prove that a potentially external action failed after starting; where the call could have launched a process, the execution/effect state remains `unknown`. Started calls that time out likewise remain `unknown` because partial or child-process mutation may already have occurred.
+## Repository layout
 
-Codex PostToolUse may inspect the WDA MCP result **in memory** to derive that small status, then discards the raw response. A Windows Sandbox launch therefore remains `unknown`, never “zero failures.”
+```text
+Windows-Dev-Agent/
+├── .agents/plugins/marketplace.json
+├── .claude-plugin/plugin.json
+├── .codex-plugin/plugin.json
+├── .github/workflows/ci.yml
+├── .mcp.json
+├── .mcp.codex.json
+├── capabilities.json
+├── hooks/
+├── scripts/launch-python.ps1
+├── skills/
+├── src/
+│   ├── capabilities.py
+│   ├── execution.py
+│   ├── claude_server.py
+│   ├── codex_server.py
+│   ├── discovery/
+│   ├── mcp/
+│   │   ├── server.py
+│   │   └── stdio.py
+│   ├── models/
+│   ├── observability/
+│   └── safety/
+└── tests/
+```
 
-`agent.log` is bounded to 2 MiB and one rotated predecessor (`agent.log.1`). `logs_query` reads retained segments in chronological order and preserves other readable retained evidence if a listed segment disappears or becomes unreadable before acquisition. Environment cache and audit state live outside the immutable plugin code tree.
+Host adapters own host-specific project/data/permission binding. `src/mcp/server.py` is the host-neutral core and is not exposed as a third directly executable runtime. Claude and Codex share one bounded stdio transport and one Windows execution core.
 
-## Capability catalog
-
-`capabilities.yaml` contains only fields with live consumers: description, safety, tags, and argv tools. Configured commands execute with `shell=False` and `DEVNULL` stdin. Caller-supplied `extra_args` upgrade effective authority to approval-required rather than inheriting the base capability class.
-
-The current catalog covers Git inspection, Python/JavaScript linting, Python/.NET tests, .NET build, and GitHub PR creation.
-
-## Verification
-
-GitHub Actions runs on `windows-latest` across Python **3.9** and **3.13** and checks:
-
-1. Python runtime compilation;
-2. the contract-focused pytest suite, including real Windows junction containment;
-3. the **actual shipped PowerShell discovery producer** on the Windows runner;
-4. exact MCP initialization/version/tool surfaces for Claude and Codex;
-5. when the canonical release index is present, that its immutable SHA resolves to a byte-identical published payload outside the marketplace index itself.
-
-The suite covers the one-call authority sequence, tri-state discovery/cache roundtrip, host/project read boundaries, argument-dependent safety, package freshness/source binding, routing discrimination, Sandbox payload staging/path/resource/reparse containment, WSL project binding, audit outcome uncertainty/retention, MCP summary minimization, host adapter wiring, and MCP transport isolation.
-
-For local development:
+## Development and verification
 
 ```text
 python -m pip install -r requirements-dev.txt
@@ -225,14 +221,24 @@ python -m compileall -q src
 python -m pytest tests -q
 ```
 
-A green run supports only the contracts those checks actually exercise. It does not establish that a human accepted a real Claude/Codex permission dialog, nor that a command launched inside an interactive Windows Sandbox completed successfully on an end-user desktop.
+GitHub Actions runs on `windows-latest` against the supported Python floor and a current Python release, currently 3.11 and 3.14. CI also exercises the shipped Windows PowerShell 5.1 bootstrap path, the native PowerShell discovery producer, both MCP adapter surfaces, Windows reparse/junction containment, and the published-release ancestry contract.
 
-## Requirements
+A green CI run supports only the surfaces those checks can observe. It does not establish that a person accepted a real Claude/Codex permission dialog, that an installed host UI behaves identically to the test harness, or that an interactive Windows Sandbox workload completed on an end-user desktop.
 
-- Windows 10/11 for full native behavior;
-- Windows PowerShell 5.1+;
-- Python 3.9+;
-- current Claude Code for the Claude adapter;
-- current Codex / ChatGPT desktop plugin runtime for the Codex adapter.
+## Release integrity
 
-Runtime dependencies are Python standard-library only. Development tests use pytest.
+Published Codex releases use an immutable two-commit identity:
+
+```text
+index-free payload commit
+→ index-only commit pinned to that payload SHA
+→ normal development/merge ancestry
+```
+
+CI locates the commit that introduced the current marketplace index and proves that its direct parent is the pinned index-free payload, that the index commit changes only the marketplace file, and that the published index remains an ancestor of the current branch. Ordinary later development is allowed to differ from the last published payload.
+
+See [CHANGELOG.md](CHANGELOG.md) for release history and [SECURITY.md](SECURITY.md) for the security boundary and reporting guidance.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

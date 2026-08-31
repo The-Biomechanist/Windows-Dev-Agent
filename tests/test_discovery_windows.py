@@ -30,15 +30,27 @@ def test_shipped_optional_feature_identities_match_windows_contract():
     assert "Get-WindowsOptionalFeature -Online" in text
 
 
-def test_wsl_enabled_but_missing_executable_is_not_swallowed_as_plain_missing():
+def test_wsl_discovery_is_store_inbox_agnostic_and_default_distro_aware():
     text = SCRIPT.read_text(encoding="utf-8")
-    inconsistent = 'elseif ($wslFeature.available -eq $true -and $wslExePresent -eq $false)'
-    generic_missing = 'elseif ($wslFeature.available -eq $false -or $wslExePresent -eq $false)'
-    assert inconsistent in text and generic_missing in text
-    assert text.index(inconsistent) < text.index(generic_missing)
-    block = text[text.index(inconsistent):text.index(generic_missing)]
-    assert 'Add-DiscoveryError "WSL feature is enabled but wsl.exe was not found"' in block
-    assert '$wslInstalled = $null' in block
+    assert 'MicrosoftCorporationII.WindowsSubsystemForLinux' in text
+    assert 'Services\\WslService' in text
+    assert 'Services\\LxssManager' in text
+    assert 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss' in text
+    assert 'Get-WslPolicyValue "AllowWSL"' in text
+    assert 'Get-WslPolicyValue "AllowInboxWSL"' in text
+    assert 'Get-WslPolicyValue "AllowWSL1"' in text
+    assert 'Services\\WslService' in text
+    assert 'Services\\LxssManager' in text
+    assert 'wsl_available = $wslAvailable' in text
+    assert 'wsl_default_distro = $wslDefaultDistro' in text
+
+
+def test_dev_drive_discovery_uses_native_persistent_volume_state_not_label():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert 'FSCTL_QUERY_PERSISTENT_VOLUME_STATE' in text
+    assert 'PERSISTENT_VOLUME_STATE_DEV_VOLUME' in text
+    assert 'TryIsDeveloperVolume' in text
+    assert 'FileSystemLabel -match "DevDrive"' not in text
 
 
 def test_native_discovery_script_emits_truth_preserving_json():
@@ -57,6 +69,8 @@ def test_native_discovery_script_emits_truth_preserving_json():
     assert payload["virtualization"]["hyper_v_available"] in {True, False, None}
     assert payload["virtualization"]["windows_sandbox_available"] in {True, False, None}
     assert payload["virtualization"]["wsl_installed"] in {True, False, None}
+    assert payload["virtualization"]["wsl_available"] in {True, False, None}
+    assert payload["virtualization"]["dev_drive_inventory_state"] in {"available", "unknown"}
     assert payload["virtualization"]["hyper_v_state"]
     assert payload["virtualization"]["windows_sandbox_state"]
     assert "username" not in payload["system"]
@@ -64,6 +78,48 @@ def test_native_discovery_script_emits_truth_preserving_json():
     assert "user_name" not in payload["git"]
     assert "user_email" not in payload["git"]
     assert "powershell_modules" not in payload
+
+
+
+
+def test_broad_tool_presence_uses_native_application_resolution_with_wda_path_policy():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "Get-WdaApplicationSearchPath" in text
+    assert "Get-Command -Name $Name -CommandType Application" in text
+    assert "[Environment]::CurrentDirectory" in text
+    assert "[IO.Path]::IsPathRooted" in text
+    assert "$env:PATH = [string]$script:WdaApplicationSearchPath.path" in text
+    assert "$env:PATH = $originalPath" in text
+
+
+def test_broad_tool_presence_rejects_alias_function_and_process_cwd_application(tmp_path: Path):
+    fake = tmp_path / "wda-fake.exe"
+    fake.write_bytes(b"not-an-executable")
+    original_path = __import__("os").environ.get("PATH", "")
+    command = rf'''
+$ErrorActionPreference = 'Stop'
+$env:PATH = '.;{tmp_path};' + $env:PATH
+$null = . '{SCRIPT}'
+function wda-function-only {{ 'function' }}
+Set-Alias -Name wda-alias-only -Value Get-Date
+if (Test-CommandAvailable 'wda-function-only') {{ throw 'function counted as application' }}
+if (Test-CommandAvailable 'wda-alias-only') {{ throw 'alias counted as application' }}
+if (Test-CommandAvailable 'wda-fake') {{ throw 'process cwd application was trusted' }}
+if (-not (Test-CommandAvailable 'python')) {{ throw 'real PATH application was lost' }}
+'''
+    env = dict(__import__("os").environ)
+    env["PATH"] = ".;" + str(tmp_path) + ";" + original_path
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+        cwd=tmp_path,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 def test_native_environment_discovery_round_trips_its_own_output(tmp_path: Path):

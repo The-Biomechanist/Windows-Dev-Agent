@@ -32,7 +32,7 @@ def test_trace_persists_derived_metadata_not_payloads():
     assert "another-secret" not in serialized
 
 
-def test_execution_outcome_preserves_plan_success_failure_launch_and_unknown():
+def test_execution_outcome_preserves_plan_success_failure_launch_stale_and_unknown():
     assert trace.derive_execution_outcome(_hook({"execute": False}))[0] == "not_executed"
     assert trace.derive_execution_outcome(
         _hook({"execute": True}, {"content": [{"type": "text", "text": '{"status":"completed","succeeded":true}'}]})
@@ -43,6 +43,10 @@ def test_execution_outcome_preserves_plan_success_failure_launch_and_unknown():
     assert trace.derive_execution_outcome(
         _hook({"execute": True}, {"content": [{"type": "text", "text": '{"status":"launched"}'}]})
     )[0] == "unknown"
+    stale = trace.derive_execution_outcome(
+        _hook({"execute": True}, {"content": [{"type": "text", "text": '{"status":"stale_plan","execution_started":false}'}]})
+    )
+    assert stale == ("not_executed", "stale_plan")
     assert trace.derive_execution_outcome(_hook({"execute": True}, None))[0] == "unknown"
 
 
@@ -96,3 +100,26 @@ def test_unfiltered_audit_is_explicit_history_surface(tmp_path: Path):
     log = tmp_path / "agent.log"
     log.write_text(json.dumps({"session_id": "a", "event": "PostToolUse", "execution_outcome": "unknown"}) + "\n", encoding="utf-8")
     assert len(audit_report.load_events(log)) == 1
+
+
+def test_audit_report_survives_retained_segment_disappearing_after_enumeration(tmp_path: Path, monkeypatch):
+    current = tmp_path / "agent.log"
+    vanished = tmp_path / "agent.log.1"
+    current.write_text(
+        json.dumps({"session_id": "s1", "event": "PostToolUse", "execution_outcome": "succeeded", "tool_name": "current"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(audit_report, "history_log_files", lambda _target: [vanished, current])
+
+    events = audit_report.load_events(current, session_id="s1")
+
+    assert len(events) == 1
+    assert events[0]["tool_name"] == "current"
+
+
+def test_audit_report_returns_empty_when_all_retained_segments_become_unreadable(tmp_path: Path, monkeypatch):
+    first = tmp_path / "agent.log.1"
+    second = tmp_path / "agent.log"
+    monkeypatch.setattr(audit_report, "history_log_files", lambda _target: [first, second])
+
+    assert audit_report.load_events(second, session_id="s1") == []

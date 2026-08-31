@@ -18,7 +18,12 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.observability.trace import append_event, derive_execution_outcome, resolve_log_file
+from src.observability.trace import (
+    append_event,
+    derive_execution_outcome,
+    derive_execution_started,
+    resolve_log_file,
+)
 from src.runtime_paths import resolve_codex_data_dir
 
 
@@ -28,6 +33,7 @@ def event_from_hook(payload: dict[str, Any]) -> dict[str, Any]:
         "ts": datetime.now(timezone.utc).isoformat(),
         "event": "PostToolUse",
         "success": None,
+        "execution_started": derive_execution_started(payload),
         "execution_outcome": execution_outcome,
         "result_status": result_status,
         "session_id": payload.get("session_id"),

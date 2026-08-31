@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 import pytest
@@ -26,8 +25,17 @@ def _write_catalog(path: Path, safety: str = "reversible") -> None:
     )
 
 
+def _reviewed_identity(catalog: Path) -> tuple[str, str, str]:
+    plan = run_capability("probe", execute=False, path=catalog)
+    return (
+        plan["executable"],
+        plan["executable_identity_kind"],
+        plan["executable_identity_sha256"],
+    )
+
+
 def test_catalog_loads_only_live_execution_fields(tmp_path: Path):
-    catalog = tmp_path / "capabilities.yaml"
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "approval-required")
     capability = load_capabilities(catalog)["probe"]
     assert capability.safety == "approval-required"
@@ -37,40 +45,78 @@ def test_catalog_loads_only_live_execution_fields(tmp_path: Path):
 
 
 def test_invalid_safety_fails_closed(tmp_path: Path):
-    catalog = tmp_path / "capabilities.yaml"
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "totally-safe-trust-me")
     with pytest.raises(CapabilityConfigError):
         load_capabilities(catalog)
 
 
-def test_non_json_yaml_extension_is_rejected_without_optional_parser(tmp_path: Path):
-    catalog = tmp_path / "capabilities.yaml"
+def test_non_json_catalog_is_rejected_without_optional_parser(tmp_path: Path):
+    catalog = tmp_path / "capabilities.json"
     catalog.write_text("probe:\n  description: ordinary-yaml\n", encoding="utf-8")
-    with pytest.raises(CapabilityConfigError, match="JSON-compatible YAML"):
+    with pytest.raises(CapabilityConfigError, match="valid JSON"):
         load_capabilities(catalog)
 
 
-def test_plan_does_not_execute(tmp_path: Path):
-    catalog = tmp_path / "capabilities.yaml"
+def test_plan_resolves_executable_identity_without_executing(tmp_path: Path):
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog)
     result = run_capability("probe", execute=False, path=catalog)
     assert result["status"] == "planned"
     assert result["safety_class"] == "reversible"
     assert result["requires_host_approval"] is True
+    assert result["executable"] == result["argv"][0]
+    assert result["executable_identity_kind"] == "file"
+    assert len(result["executable_identity_sha256"]) == 64
+    assert Path(result["argv"][0]).is_absolute()
     assert "stdout" not in result
 
 
 def test_execute_request_has_no_model_supplied_approval_bit(tmp_path: Path):
-    catalog = tmp_path / "capabilities.yaml"
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "approval-required")
-    result = run_capability("probe", execute=True, path=catalog)
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=expected,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
     assert result["status"] == "completed"
     assert result["execution_started"] is True
     assert "runtime-ok" in result["stdout"]
 
 
+def test_execute_requires_reviewed_executable_identity(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.json"
+    _write_catalog(catalog, "read-only")
+    monkeypatch.setattr(capabilities, "run_bounded", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not execute")))
+
+    missing = run_capability("probe", execute=True, path=catalog)
+    assert missing["status"] == "invalid_input"
+    assert missing["execution_started"] is False
+
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    missing_identity = run_capability("probe", execute=True, expected_executable=expected, path=catalog)
+    assert missing_identity["status"] == "invalid_input"
+    assert missing_identity["execution_started"] is False
+
+    stale = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=str(tmp_path / "other.exe"),
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
+    assert stale["status"] == "stale_plan"
+    assert stale["execution_started"] is False
+
+
 def test_extra_args_upgrade_effective_safety(tmp_path: Path):
-    catalog = tmp_path / "capabilities.yaml"
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "reversible")
     capability = load_capabilities(catalog)["probe"]
     assert effective_safety(capability, []) == "reversible"
@@ -82,65 +128,96 @@ def test_extra_args_upgrade_effective_safety(tmp_path: Path):
 
 
 def test_read_only_capability_with_extra_args_is_not_silently_read_only(tmp_path: Path):
-    catalog = tmp_path / "capabilities.yaml"
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "read-only")
     plan = run_capability("probe", execute=False, extra_args=["--anything"], path=catalog)
     assert plan["base_safety_class"] == "read-only"
     assert plan["safety_class"] == "approval-required"
 
 
-def test_capability_subprocess_cannot_consume_mcp_stdin(tmp_path: Path, monkeypatch):
-    catalog = tmp_path / "capabilities.yaml"
+def test_runner_receives_exact_resolved_executable(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "read-only")
     observed = {}
-
-    class Result:
-        returncode = 0
-        stdout = "runtime-ok\n"
-        stderr = ""
 
     def fake_run(argv, **kwargs):
         observed["argv"] = argv
         observed.update(kwargs)
-        return Result()
+        return {
+            "succeeded": True,
+            "returncode": 0,
+            "stdout": "runtime-ok\n",
+            "stderr": "",
+            "argv": argv,
+            "execution_started": True,
+        }
 
-    monkeypatch.setattr(capabilities.subprocess, "run", fake_run)
-    result = run_capability("probe", execute=True, path=catalog)
+    monkeypatch.setattr(capabilities, "run_bounded", fake_run)
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=expected,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
     assert result["status"] == "completed"
-    assert observed["stdin"] is capabilities.subprocess.DEVNULL
+    assert Path(observed["argv"][0]).is_absolute()
+    assert Path(observed["argv"][0]).resolve() == Path(sys.executable).resolve()
+    assert observed["expected_executable_identity_kind"] == expected_kind
+    assert observed["expected_executable_identity_sha256"] == expected_sha256
 
 
-def test_oserror_before_process_start_is_not_reported_as_executed(tmp_path: Path, monkeypatch):
-    catalog = tmp_path / "capabilities.yaml"
+def test_spawn_failure_is_not_reported_as_executed(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "read-only")
     monkeypatch.setattr(
-        capabilities.subprocess,
-        "run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("launch failed")),
+        capabilities,
+        "run_bounded",
+        lambda *_args, **_kwargs: {"succeeded": False, "error": "launch failed", "execution_started": False},
     )
-    result = run_capability("probe", execute=True, path=catalog)
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=expected,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
     assert result["status"] == "failed"
     assert result["execution_started"] is False
     assert "timed_out" not in result
 
 
 def test_timeout_preserves_started_but_unfinished_execution_state(tmp_path: Path, monkeypatch):
-    catalog = tmp_path / "capabilities.yaml"
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "read-only")
     monkeypatch.setattr(
-        capabilities.subprocess,
-        "run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired(["probe"], 1)),
+        capabilities,
+        "run_bounded",
+        lambda *_args, **_kwargs: {"succeeded": False, "error": "timeout", "execution_started": True, "timed_out": True},
     )
-    result = run_capability("probe", execute=True, path=catalog)
+    expected, expected_kind, expected_sha256 = _reviewed_identity(catalog)
+    result = run_capability(
+        "probe",
+        execute=True,
+        expected_executable=expected,
+        expected_executable_identity_kind=expected_kind,
+        expected_executable_identity_sha256=expected_sha256,
+        path=catalog,
+    )
     assert result["status"] == "failed"
     assert result["execution_started"] is True
     assert result["timed_out"] is True
 
 
-def test_forbidden_capability_never_executes(tmp_path: Path):
-    catalog = tmp_path / "capabilities.yaml"
+def test_forbidden_capability_never_executes(tmp_path: Path, monkeypatch):
+    catalog = tmp_path / "capabilities.json"
     _write_catalog(catalog, "forbidden")
+    monkeypatch.setattr(capabilities, "run_bounded", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not execute")))
     result = run_capability("probe", execute=True, path=catalog)
     assert result["status"] == "blocked"
+    assert result["execution_started"] is False
     assert "stdout" not in result

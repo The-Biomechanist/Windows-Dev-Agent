@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.13"]
+        python-version: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -24,12 +24,54 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install dependencies
+          cache-dependency-path: requirements-dev.txt
+      - name: Install development dependency
         run: python -m pip install -r requirements-dev.txt
       - name: Compile runtime
         run: python -m compileall -q src
       - name: Run tests
         run: python -m pytest tests -q
+      - name: Isolated bootstrap smoke test
+        shell: pwsh
+        run: |
+          $env:WINDOWS_DEV_AGENT_PYTHON = (python -c "import sys; print(sys.executable)").Trim()
+          $event = '{"tool_name":"PowerShell","tool_input":{"command":"Get-ChildItem"}}'
+          $systemPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $launcher = (Resolve-Path "./scripts/launch-python.ps1").Path
+
+          $psi = [System.Diagnostics.ProcessStartInfo]::new()
+          $psi.FileName = $systemPowerShell
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardInput = $true
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          foreach ($argument in @(
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            $launcher,
+            "-Module",
+            "src.safety.claude_gate"
+          )) {
+            [void]$psi.ArgumentList.Add($argument)
+          }
+
+          $process = [System.Diagnostics.Process]::Start($psi)
+          $process.StandardInput.WriteLine($event)
+          $process.StandardInput.Close()
+          $output = $process.StandardOutput.ReadToEnd()
+          $errorOutput = $process.StandardError.ReadToEnd()
+          $process.WaitForExit()
+
+          if ($process.ExitCode -ne 0) {
+            throw "launcher exited $($process.ExitCode): $errorOutput"
+          }
+          if ($output.Trim()) {
+            throw "read-only safety hook unexpectedly emitted a permission decision: $output"
+          }
+          Write-Host "isolated launcher OK: $env:WINDOWS_DEV_AGENT_PYTHON"
       - name: MCP preflight
         shell: pwsh
         run: |
@@ -58,9 +100,20 @@ jobs:
               tools = asyncio.run(handle({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
               names = [tool["name"] for tool in tools["result"]["tools"]]
               assert names == expected, (host, names)
+              assert all(tool["inputSchema"].get("additionalProperties") is False for tool in tools["result"]["tools"])
               print(f"{host} MCP preflight OK:", ", ".join(names))
           '@ | python -
-      - name: Release index identity
+      - name: Native discovery producer smoke test
+        shell: pwsh
+        run: |
+          $systemPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $raw = & $systemPowerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./src/discovery/discovery.ps1
+          if ($LASTEXITCODE -ne 0) { throw "discovery.ps1 exited $LASTEXITCODE" }
+          $snapshot = $raw | ConvertFrom-Json
+          if ($null -eq $snapshot.system) { throw "discovery snapshot is missing system" }
+          if ($null -eq $snapshot.virtualization) { throw "discovery snapshot is missing virtualization" }
+          Write-Host "native discovery producer returned canonical JSON"
+      - name: Published release ancestry
         shell: pwsh
         run: |
           @'
@@ -69,45 +122,63 @@ jobs:
           import re
           import subprocess
 
-          index = Path(".agents/plugins/marketplace.json")
+          index_path = ".agents/plugins/marketplace.json"
+          index = Path(index_path)
           if not index.exists():
-              print("No marketplace index in immutable plugin payload; nothing to verify.")
+              print("No marketplace index on this branch; no published-release ancestry to verify.")
               raise SystemExit(0)
 
-          market = json.loads(index.read_text(encoding="utf-8"))
-          source = market["plugins"][0]["source"]
-          sha = source.get("sha", "")
-          assert re.fullmatch(r"[0-9a-f]{40}", sha), source
-          assert "ref" not in source and "path" not in source, source
+          def git(*args: str) -> str:
+              return subprocess.check_output(["git", *args], text=True).strip()
 
-          pinned_manifest = json.loads(
-              subprocess.check_output(
-                  ["git", "show", f"{sha}:.codex-plugin/plugin.json"],
-                  text=True,
-              )
+          index_commit = git("log", "-n", "1", "--format=%H", "--", index_path)
+          assert re.fullmatch(r"[0-9a-f]{40}", index_commit), index_commit
+
+          ancestry = subprocess.run(
+              ["git", "merge-base", "--is-ancestor", index_commit, "HEAD"],
+              capture_output=True,
+              text=True,
           )
-          current_manifest = json.loads(Path(".codex-plugin/plugin.json").read_text(encoding="utf-8"))
-          assert pinned_manifest["name"] == current_manifest["name"] == "windows-dev-agent"
-          assert pinned_manifest["version"] == current_manifest["version"]
+          assert ancestry.returncode == 0, f"published index commit {index_commit} is not an ancestor of HEAD"
+
+          parent_line = git("rev-list", "--parents", "-n", "1", index_commit).split()
+          assert len(parent_line) == 2, f"published index commit must have exactly one direct parent: {parent_line}"
+          payload_parent = parent_line[1]
+
+          market = json.loads(git("show", f"{index_commit}:{index_path}"))
+          plugin = market["plugins"][0]
+          source = plugin["source"]
+          pinned = source.get("sha", "")
+          assert plugin["name"] == "windows-dev-agent"
+          assert re.fullmatch(r"[0-9a-f]{40}", pinned), source
+          assert "ref" not in source and "path" not in source, source
+          assert pinned == payload_parent, (
+              f"marketplace pins {pinned}, but the index commit's direct payload parent is {payload_parent}"
+          )
 
           payload_carries_index = subprocess.run(
-              ["git", "cat-file", "-e", f"{sha}:.agents/plugins/marketplace.json"],
+              ["git", "cat-file", "-e", f"{pinned}:{index_path}"],
               capture_output=True,
               text=True,
           )
           assert payload_carries_index.returncode != 0, "immutable payload must not carry its own marketplace index"
 
-          diff = subprocess.run(
-              [
-                  "git", "diff", "--exit-code", "--no-ext-diff",
-                  sha, "HEAD", "--", ".", ":(exclude).agents/plugins/marketplace.json",
-              ],
-              capture_output=True,
-              text=True,
+          changed = [
+              line for line in git("diff", "--name-only", pinned, index_commit).splitlines()
+              if line
+          ]
+          assert changed == [index_path], (
+              "published index commit must differ from its payload parent only by the marketplace index; "
+              f"observed {changed}"
           )
-          assert diff.returncode == 0, (
-              "marketplace payload differs from current release tree outside the index:\n"
-              + diff.stdout + diff.stderr
+
+          codex_manifest = json.loads(git("show", f"{pinned}:.codex-plugin/plugin.json"))
+          claude_manifest = json.loads(git("show", f"{pinned}:.claude-plugin/plugin.json"))
+          assert codex_manifest["name"] == claude_manifest["name"] == "windows-dev-agent"
+          assert codex_manifest["version"] == claude_manifest["version"]
+
+          print(
+              f"published release {codex_manifest['version']} is immutable: "
+              f"payload={pinned} index={index_commit}; current development HEAD may differ"
           )
-          print(f"Marketplace pins byte-identical payload {sha} version {pinned_manifest['version']}")
           '@ | python -

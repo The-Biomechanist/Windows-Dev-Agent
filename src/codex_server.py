@@ -7,19 +7,18 @@ Codex host inventory. Human approval remains Codex-owned.
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager
 from copy import deepcopy
 import json
 import logging
 import os
 from pathlib import Path
-import sys
 from typing import Any, Iterator, Optional
 
 from src import __version__
 from src.runtime_paths import codex_home, resolve_codex_data_dir
 from src.mcp import server as common
+from src.mcp.stdio import run_stdio
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,9 @@ CODEX_INSTRUCTIONS = (
     "explicitly to project-scoped tools; never use the installed plugin cache as "
     "the project. Codex owns execution approval through MCP/shell policy. Bundled "
     "hook behavior is additional and is active only after the user trusts the "
-    "plugin hooks; the core mutation tools remain prompt-gated without it."
+    "plugin hooks; when trusted, those hooks independently bind project-scoped calls "
+    "to the host event cwd. Without trusted hooks, the required absolute project path is "
+    "caller-selected and prompt-visible rather than independently host-attested."
 )
 
 
@@ -67,7 +68,9 @@ TOOLS = _codex_tools()
 
 
 def _resolve_project(value: Any) -> tuple[Optional[Path], Optional[str]]:
-    raw = str(value or "").strip()
+    if not isinstance(value, str):
+        return None, "Current Codex project directory must be a string"
+    raw = value.strip()
     if not raw:
         return None, "Current Codex project directory is required for this tool"
     path = Path(raw).expanduser()
@@ -84,7 +87,7 @@ def _runtime_binding(project: Optional[Path] = None) -> Iterator[None]:
     data_dir = resolve_codex_data_dir().expanduser()
     keys = ("WINDOWS_DEV_AGENT_HOST", "WINDOWS_DEV_AGENT_DATA_DIR", "WINDOWS_DEV_AGENT_PROJECT_DIR")
     previous_env = {key: os.environ.get(key) for key in keys}
-    previous_common = (common.DATA_DIR, common.LOG_FILE, common.ENVIRONMENT_CACHE_FILE)
+    previous_common = (common.DATA_DIR, common.LOG_FILE)
 
     os.environ["WINDOWS_DEV_AGENT_HOST"] = "codex"
     os.environ["WINDOWS_DEV_AGENT_DATA_DIR"] = str(data_dir)
@@ -92,11 +95,10 @@ def _runtime_binding(project: Optional[Path] = None) -> Iterator[None]:
         os.environ["WINDOWS_DEV_AGENT_PROJECT_DIR"] = str(project)
     common.DATA_DIR = data_dir
     common.LOG_FILE = data_dir / "agent.log"
-    common.ENVIRONMENT_CACHE_FILE = data_dir / "environment.json"
     try:
         yield
     finally:
-        common.DATA_DIR, common.LOG_FILE, common.ENVIRONMENT_CACHE_FILE = previous_common
+        common.DATA_DIR, common.LOG_FILE = previous_common
         for key, value in previous_env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -160,11 +162,16 @@ async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
     project: Optional[Path] = None
     tool_name = ""
     if method == "tools/call":
-        params = request.get("params") or {}
-        tool_name = str(params.get("name", ""))
+        params = request.get("params")
+        if not isinstance(params, dict):
+            return _invalid_tool_result(request_id, "tool params must be an object")
+        raw_tool_name = params.get("name")
+        if not isinstance(raw_tool_name, str):
+            return _invalid_tool_result(request_id, "tool name must be a string")
+        tool_name = raw_tool_name
         project_arg = PROJECT_ARG_BY_TOOL.get(tool_name)
         if project_arg:
-            tool_args = params.get("arguments") or {}
+            tool_args = params.get("arguments", {})
             if not isinstance(tool_args, dict):
                 return _invalid_tool_result(request_id, "tool arguments must be an object")
             project, error = _resolve_project(tool_args.get(project_arg))
@@ -183,31 +190,9 @@ async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
 
 
 def main_sync() -> int:
-    logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        while True:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                request = json.loads(line)
-                if not isinstance(request, dict):
-                    raise ValueError("request must be a JSON object")
-                response = loop.run_until_complete(handle_request(request))
-            except Exception as exc:
-                logger.exception("Codex adapter request failed")
-                response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(exc)}}
-            if response is not None:
-                sys.stdout.write(json.dumps(response, default=str) + "\n")
-                sys.stdout.flush()
-    finally:
-        loop.close()
-    return 0
+    with _runtime_binding():
+        common._cleanup_stale_sandbox_bundles()
+    return run_stdio(handle_request, logger=logger)
 
 
 if __name__ == "__main__":

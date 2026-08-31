@@ -1,7 +1,16 @@
 {
   "windows_dev_agent": {
-    "command": "python",
-    "args": ["-m", "src.codex_server"],
+    "command": "powershell.exe",
+    "args": [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      "scripts/launch-python.ps1",
+      "-Module",
+      "src.codex_server"
+    ],
     "cwd": ".",
     "env": {"WINDOWS_DEV_AGENT_HOST": "codex"},
     "tool_timeout_sec": 610,

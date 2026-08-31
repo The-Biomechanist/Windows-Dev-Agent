@@ -8,17 +8,16 @@ Relative project paths are interpreted under the host-owned project root.
 
 from __future__ import annotations
 
-import asyncio
 from copy import deepcopy
 import json
 import logging
 import os
 from pathlib import Path
-import sys
 from typing import Any, Optional
 
 from src import __version__
 from src.mcp import server as common
+from src.mcp.stdio import run_stdio
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +59,17 @@ def _bind_project_scope(request: dict[str, Any]) -> tuple[Optional[dict[str, Any
     if request.get("method") != "tools/call":
         return request, None
 
-    params = request.get("params") or {}
+    params = request.get("params")
     if not isinstance(params, dict):
         return None, "tool params must be an object"
-    tool_name = str(params.get("name", ""))
+    tool_name = params.get("name")
+    if not isinstance(tool_name, str):
+        return None, "tool name must be a string"
     project_arg = PROJECT_ARG_BY_TOOL.get(tool_name)
     if project_arg is None:
         return request, None
 
-    tool_args = params.get("arguments") or {}
+    tool_args = params.get("arguments", {})
     if not isinstance(tool_args, dict):
         return None, "tool arguments must be an object"
 
@@ -76,7 +77,10 @@ def _bind_project_scope(request: dict[str, Any]) -> tuple[Optional[dict[str, Any
     if error or root is None:
         return None, error or "Claude project directory is required"
 
-    raw = str(tool_args.get(project_arg, "")).strip()
+    raw_value = tool_args.get(project_arg, "")
+    if raw_value is not None and not isinstance(raw_value, str):
+        return None, f"{project_arg} must be a string"
+    raw = (raw_value or "").strip()
     if raw:
         requested = Path(raw).expanduser()
         candidate = requested.resolve() if requested.is_absolute() else (root / requested).resolve()
@@ -103,43 +107,13 @@ async def handle_request(request: dict[str, Any]) -> Optional[dict[str, Any]]:
 
     response = await common.handle_request(normalized)
     if normalized.get("method") == "initialize" and response and isinstance(response.get("result"), dict):
-        response["result"]["serverInfo"] = {
-            "name": "windows-dev-agent",
-            "version": __version__,
-        }
+        response["result"]["serverInfo"] = {"name": "windows-dev-agent", "version": __version__}
     return response
 
 
 def main_sync() -> int:
-    logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        while True:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                request = json.loads(line)
-                if not isinstance(request, dict):
-                    raise ValueError("request must be a JSON object")
-                response = loop.run_until_complete(handle_request(request))
-            except Exception as exc:
-                logger.exception("Claude adapter request failed")
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32700, "message": str(exc)},
-                }
-            if response is not None:
-                sys.stdout.write(json.dumps(response, default=str) + "\n")
-                sys.stdout.flush()
-    finally:
-        loop.close()
-    return 0
+    common._cleanup_stale_sandbox_bundles()
+    return run_stdio(handle_request, logger=logger)
 
 
 if __name__ == "__main__":

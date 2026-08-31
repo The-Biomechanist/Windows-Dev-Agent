@@ -24,7 +24,13 @@ def load_events(
     target = log_file or resolve_log_file()
     events: list[dict[str, Any]] = []
     for source in history_log_files(target):
-        for line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            # Audit reporting is best-effort over retained history. Rotation or an
+            # unreadable predecessor must not turn a Stop hook into an execution blocker.
+            continue
+        for line in lines:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError:
@@ -55,6 +61,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         if event.get("execution_outcome") == "failed"
         or ("execution_outcome" not in event and event.get("success") is False)
     ]
+    external_process_started = sum(event.get("execution_started") is True for event in events)
     return {
         "total_events": len(events),
         "event_types": dict(event_types),
@@ -64,6 +71,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         "execution_unknown": outcomes.get("unknown", 0),
         "not_executed": outcomes.get("not_executed", 0),
         "not_applicable": outcomes.get("not_applicable", 0),
+        "external_process_started": external_process_started,
         "permission_denials": len(denied),
         "last_failure_tool": failed_tools[-1].get("tool_name") if failed_tools else None,
         "last_denied_tool": denied[-1].get("tool_name") if denied else None,
@@ -113,6 +121,7 @@ def main() -> int:
         f"failed: {summary['execution_failed']} | "
         f"unknown: {summary['execution_unknown']} | "
         f"not executed: {summary['not_executed']} | "
+        f"external processes started: {summary['external_process_started']} | "
         f"Permission denials: {summary['permission_denials']}"
     )
     if summary["tools"]:
