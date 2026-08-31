@@ -45,6 +45,7 @@ from src.file_guard import (
     valid_executable_identity,
 )
 from src.observability.trace import history_log_files
+from src.windows_state import query_wsl_route_state
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -698,8 +699,12 @@ def _select_sandbox(environment: str, isolation_requirement: Optional[str], work
     if environment != "auto" and environment != expected:
         return None, f"environment={environment} does not satisfy isolation_requirement={isolation_requirement}; required backend is {expected}", "invalid_input"
     selected = expected
-    if selected == "wsl" and not _wsl_executable():
-        return None, "Windows-owned WSL executable is not available for linux_compatibility", "unavailable"
+    if selected == "wsl":
+        wsl_executable = _wsl_executable()
+        wsl_state = query_wsl_route_state(wsl_executable)
+        if wsl_state.available is not True:
+            status = "unavailable" if wsl_state.available is False else "unknown"
+            return None, wsl_state.reason or "WSL route state could not be established", status
     if selected == "dev_container":
         has_config = False
         for config_path in (workspace / ".devcontainer" / "devcontainer.json", workspace / ".devcontainer.json"):

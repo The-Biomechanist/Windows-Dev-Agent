@@ -7,6 +7,7 @@ import shutil
 
 from src.file_guard import ExecutableIdentity
 from src.mcp import server
+from src.windows_state import WslRouteState
 
 
 def run(coro):
@@ -184,6 +185,7 @@ def test_package_install_plan_never_executes_or_invalidates(monkeypatch):
 
 def test_plan_first_execution_refuses_missing_or_changed_executable_identity(tmp_path: Path, monkeypatch):
     trusted = "C:\\Windows\\System32\\wsl.exe"
+    monkeypatch.setattr(server, "query_wsl_route_state", lambda _exe: WslRouteState(True, "Ubuntu"))
     identity = ExecutableIdentity(kind="file", sha256="d" * 64)
     monkeypatch.setattr(server, "_wsl_executable", lambda: trusted)
     monkeypatch.setattr(server, "executable_identity", lambda _path: identity)
@@ -366,6 +368,7 @@ def test_failed_sandbox_staging_removes_partial_bundle(tmp_path: Path, monkeypat
 
 def test_wsl_route_uses_windows_owned_identity_and_project_cd(tmp_path: Path, monkeypatch):
     trusted_wsl = "C:\\Windows\\System32\\wsl.exe"
+    monkeypatch.setattr(server, "query_wsl_route_state", lambda _exe: WslRouteState(True, "Ubuntu"))
     identity = ExecutableIdentity(kind="file", sha256="f" * 64)
     monkeypatch.setattr(server, "_wsl_executable", lambda: trusted_wsl)
     monkeypatch.setattr(server, "executable_identity", lambda _path: identity)
@@ -390,6 +393,7 @@ def test_wsl_route_uses_windows_owned_identity_and_project_cd(tmp_path: Path, mo
 
 def test_captured_sandbox_spawn_failure_is_not_reported_as_started(tmp_path: Path, monkeypatch):
     trusted_wsl = "C:\\Windows\\System32\\wsl.exe"
+    monkeypatch.setattr(server, "query_wsl_route_state", lambda _exe: WslRouteState(True, "Ubuntu"))
     identity = ExecutableIdentity(kind="file", sha256="1" * 64)
     monkeypatch.setattr(server, "_wsl_executable", lambda: trusted_wsl)
     monkeypatch.setattr(server, "executable_identity", lambda _path: identity)

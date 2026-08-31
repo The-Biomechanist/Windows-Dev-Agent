@@ -107,7 +107,7 @@ Availability is tri-state:
 - `false`: observed absent/disabled;
 - `null`: not established by the probe.
 
-Native discovery is performed with Windows-owned PowerShell and returns one canonical `EnvironmentSnapshot` shape even when the probe degrades or fails unexpectedly.
+Native discovery is performed with Windows-owned PowerShell and returns one canonical `EnvironmentSnapshot` shape even when the probe degrades or fails unexpectedly. WSL discovery treats the legacy inbox optional component as only one possible implementation: Store WSL, native service registration, global/Inbox/WSL1 machine policy, and the current user's registered distributions are evaluated separately. `wsl_installed` records control-plane installation, while `wsl_available` requires policy permission plus a registered default distribution that WDA can actually target for `linux_compatibility`. Dev Drive inventory is established from the filesystem's `PERSISTENT_VOLUME_STATE_DEV_VOLUME` flag through `FSCTL_QUERY_PERSISTENT_VOLUME_STATE`; a user-chosen volume label is not treated as Dev Drive identity.
 
 The cache uses the same canonical snapshot representation, is capped at 1 MiB, written atomically, and expires after five minutes. Package-install execution must first advance the cache mutation generation and invalidate the prior snapshot; if that authority transition cannot be established, the installer is not started. A discovery that began against an older generation cannot later resurrect a stale cache entry.
 
@@ -147,7 +147,7 @@ Every `sandbox_run` call names the property it requires:
 | `project_reproducibility` | configured project Dev Container |
 | `untrusted_windows` | Windows Sandbox |
 
-`environment:auto` chooses the backend dictated by that property. If the caller names an explicit backend that does not satisfy the requirement, WDA rejects the request instead of silently weakening the boundary. `sandbox_run(execute:false)` also returns the absolute backend `executable` plus its identity kind and SHA-256 fingerprint; execution must echo all three through the matching `expected_*` fields so a changed backend identity invalidates the plan before staging or launch.
+`environment:auto` chooses the backend dictated by that property. If the caller names an explicit backend that does not satisfy the requirement, WDA rejects the request instead of silently weakening the boundary. The WSL route requires the Windows-owned `wsl.exe`, machine policy that permits WSL, and a valid registered default distribution under the current user's native WSL registration; `wsl.exe` presence alone is not treated as Linux execution availability. `sandbox_run(execute:false)` also returns the absolute backend `executable` plus its identity kind and SHA-256 fingerprint; execution must echo all three through the matching `expected_*` fields so a changed backend identity invalidates the plan before staging or launch.
 
 ### Windows Sandbox
 
