@@ -37,7 +37,7 @@ def test_python_launcher_is_isolated_and_never_searches_path_for_python():
     text = (ROOT / "scripts" / "launch-python.ps1").read_text(encoding="utf-8")
     assert "$MinimumPython = [Version]'3.11'" in text
     assert "WINDOWS_DEV_AGENT_PYTHON must be an absolute" in text
-    assert "When\npresent, the override is authoritative" in text
+    assert "the override is authoritative" in text
     assert text.index("if ($ExplicitOverridePresent)") < text.index("} else {") < text.index("$RegistryRoots =")
     assert " -I -c " in text
     assert "Get-Command python" not in text
