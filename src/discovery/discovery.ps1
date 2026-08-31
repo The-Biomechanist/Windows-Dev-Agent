@@ -269,12 +269,12 @@ $wslInstalled = $null
 if ($wslExePresent -eq $false) {
     $wslInstalled = $false
 }
-elif ($wslExePresent -eq $true -and (
+elseif ($wslExePresent -eq $true -and (
     $wslServicePresent -eq $true -or $storeWslPresent -eq $true -or $wslFeature.available -eq $true
 )) {
     $wslInstalled = $true
 }
-elif ($wslExePresent -eq $true -and
+elseif ($wslExePresent -eq $true -and
       $wslServicePresent -eq $false -and
       $storeWslPresent -eq $false -and
       $wslFeature.available -eq $false) {
@@ -321,7 +321,7 @@ $wslAvailable = $null
 if ($wslInstalled -eq $false -or $wslPolicyAllowed -eq $false) {
     $wslAvailable = $false
 }
-elif ($wslInstalled -eq $true -and $wslPolicyAllowed -eq $true -and $wslDistroInventoryEstablished) {
+elseif ($wslInstalled -eq $true -and $wslPolicyAllowed -eq $true -and $wslDistroInventoryEstablished) {
     if ([string]::IsNullOrWhiteSpace($wslDefaultDistro)) {
         $wslAvailable = $false
     }
