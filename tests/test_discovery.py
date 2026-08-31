@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from src.discovery import discovery as discovery_module
 from src.discovery.discovery import EnvironmentDiscovery, invalidate_environment_cache
 from src.models.environment import (
@@ -36,12 +38,14 @@ MOCK_DISCOVERY_OUTPUT = {
     "virtualization": {
         "hyper_v_available": None,
         "hyper_v_state": "unknown",
-        "wsl_installed": True,
-        "wsl_version": "WSL version: 2.5.9.0",
-        "wsl_distros": ["Ubuntu"],
+        "wsl_installed": None,
+        "wsl_version": None,
+        "wsl_distros": [],
         "windows_sandbox_available": False,
         "windows_sandbox_state": "Disabled",
-        "dev_drives": [{"drive_letter": "D", "label": "DevDrive", "size_gb": 100.0, "free_space_gb": 80.0}],
+        "dev_drive_enabled": None,
+        "dev_drive_state": "unknown",
+        "dev_drives": None,
     },
     "development_tools": {
         "winget_available": True,
@@ -68,6 +72,30 @@ MOCK_DISCOVERY_OUTPUT = {
         "jetbrains_clion": False,
     },
 }
+
+
+@pytest.fixture(autouse=True)
+def _stable_native_overlay(monkeypatch):
+    monkeypatch.setattr(
+        discovery_module,
+        "probe_native_virtualization",
+        lambda: {
+            "wsl_installed": True,
+            "wsl_version": None,
+            "dev_drive_enabled": True,
+            "dev_drive_state": "enabled",
+            "dev_drives": [
+                {
+                    "drive_letter": "D",
+                    "label": "ordinary-label",
+                    "size_gb": 100.0,
+                    "free_space_gb": 80.0,
+                }
+            ],
+            "execution_started": False,
+            "errors": [],
+        },
+    )
 
 
 def _result(*, returncode=0, stdout=None, stderr="", timed_out=False, started=True):
@@ -101,8 +129,21 @@ def test_unknown_optional_feature_is_not_missing():
     assert availability_state(virt.windows_sandbox_available) == "missing"
 
 
+def test_dev_drive_inventory_preserves_unknown_vs_established_empty():
+    unknown = EnvironmentSnapshot(timestamp=datetime.now(), success=False)
+    assert unknown.to_dict()["virtualization"]["dev_drives"] is None
+
+    established_empty = EnvironmentSnapshot(
+        timestamp=datetime.now(),
+        success=True,
+        virtualization=VirtualizationInfo(dev_drive_enabled=True, dev_drive_state="enabled", dev_drives=[]),
+    )
+    assert established_empty.to_dict()["virtualization"]["dev_drives"] == []
+    assert established_empty.to_dict()["probe_states"]["dev_drive"] == "available"
+
+
 def test_dev_drive_is_not_reported_as_isolation_backend():
-    virt = VirtualizationInfo(dev_drives=[DevDrive("D", "DevDrive", 100.0, 80.0)])
+    virt = VirtualizationInfo(dev_drives=[DevDrive("D", "ordinary-label", 100.0, 80.0)])
     assert "dev-drive" not in virt.get_available_isolation_options()
 
 
@@ -122,6 +163,9 @@ def test_snapshot_roundtrip_is_lossless_for_canonical_fields():
             wsl_installed=True,
             windows_sandbox_available=False,
             windows_sandbox_state="Disabled",
+            dev_drive_enabled=None,
+            dev_drive_state="unsupported_api",
+            dev_drives=None,
         ),
         development_tools=DevelopmentTools(winget_available=True, scoop_available=None),
         runtimes=Runtimes(python=RuntimeInfo(available=True, version="3.11")),
@@ -131,6 +175,7 @@ def test_snapshot_roundtrip_is_lossless_for_canonical_fields():
     restored = EnvironmentSnapshot.from_json(snapshot.to_json())
     assert restored.to_dict() == snapshot.to_dict()
     assert restored.virtualization.hyper_v_available is None
+    assert restored.virtualization.dev_drives is None
     assert restored.editors.visual_studio_code is True
     assert restored.git.version == "git version 2.45"
 
@@ -141,6 +186,10 @@ def test_parse_valid_partial_output_preserves_unknown(monkeypatch, tmp_path: Pat
     assert snapshot.success is False
     assert snapshot.virtualization.hyper_v_available is None
     assert snapshot.virtualization.windows_sandbox_available is False
+    assert snapshot.virtualization.wsl_installed is True
+    assert snapshot.virtualization.dev_drive_enabled is True
+    assert snapshot.virtualization.dev_drives is not None
+    assert snapshot.virtualization.dev_drives[0].label == "ordinary-label"
     assert snapshot.development_tools.scoop_available is None
     assert snapshot.git.version == "git version 2.45.0"
 
@@ -169,6 +218,48 @@ def test_force_refresh_runs_discovery_again(monkeypatch, tmp_path: Path):
     assert calls == [1, 1]
 
 
+def test_native_overlay_execution_is_accounted(monkeypatch, tmp_path: Path):
+    _patch_native_probe(monkeypatch, _result(started=False))
+    monkeypatch.setattr(
+        discovery_module,
+        "probe_native_virtualization",
+        lambda: {
+            "wsl_installed": True,
+            "wsl_version": None,
+            "dev_drive_enabled": None,
+            "dev_drive_state": "unsupported_api",
+            "dev_drives": [],
+            "execution_started": True,
+            "errors": [],
+        },
+    )
+    discovery = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path)
+    discovery.discover()
+    assert discovery.last_execution_started is True
+
+
+def test_native_overlay_failure_preserves_unknown_and_degrades(monkeypatch, tmp_path: Path):
+    _patch_native_probe(monkeypatch, _result())
+    monkeypatch.setattr(
+        discovery_module,
+        "probe_native_virtualization",
+        lambda: {
+            "wsl_installed": None,
+            "wsl_version": None,
+            "dev_drive_enabled": None,
+            "dev_drive_state": "unknown",
+            "dev_drives": None,
+            "execution_started": False,
+            "errors": ["native state unavailable"],
+        },
+    )
+    snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
+    assert snapshot.success is False
+    assert snapshot.virtualization.wsl_installed is None
+    assert snapshot.virtualization.dev_drives is None
+    assert "native state unavailable" in snapshot.errors
+
+
 def test_nonzero_process_marks_parseable_snapshot_degraded(monkeypatch, tmp_path: Path):
     good = dict(MOCK_DISCOVERY_OUTPUT)
     good["success"] = True
@@ -184,6 +275,7 @@ def test_invalid_json_returns_degraded_fallback(monkeypatch, tmp_path: Path):
     snapshot = EnvironmentDiscovery(cache_enabled=False, data_dir=tmp_path).discover()
     assert snapshot.success is False
     assert snapshot.virtualization.windows_sandbox_available is None
+    assert snapshot.virtualization.dev_drives is None
 
 
 def test_timeout_returns_canonical_degraded_snapshot(monkeypatch, tmp_path: Path):
@@ -194,6 +286,7 @@ def test_timeout_returns_canonical_degraded_snapshot(monkeypatch, tmp_path: Path
     assert any("timed out" in error for error in snapshot.errors)
     assert payload["probe_states"]["wsl"] == "unknown"
     assert payload["probe_states"]["windows_sandbox"] == "unknown"
+    assert payload["probe_states"]["dev_drive"] == "unknown"
 
 
 def test_cache_load_rejects_oversized_file(monkeypatch, tmp_path: Path):
