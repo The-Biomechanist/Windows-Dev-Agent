@@ -14,6 +14,7 @@ from typing import Iterator, Optional
 import uuid
 
 from src.execution import resolve_windows_system_executable, run_bounded
+from src.discovery.native_windows import probe_native_virtualization
 from ..models.environment import EnvironmentSnapshot, SystemInfo
 
 logger = logging.getLogger(__name__)
@@ -189,6 +190,37 @@ class EnvironmentDiscovery:
         except json.JSONDecodeError:
             detail = stderr.strip() or "PowerShell discovery returned invalid or oversized JSON"
             return self._fallback_discovery(detail)
+
+        # PowerShell/CIM owns the broad Windows management snapshot. Facts that
+        # require lower-level Windows authority are overlaid from direct Win32 or
+        # the Windows-owned control-plane executable rather than inferred from labels
+        # or legacy optional-component state.
+        try:
+            native = probe_native_virtualization()
+        except Exception as exc:
+            native = {
+                "wsl_installed": None,
+                "wsl_version": None,
+                "dev_drive_enabled": None,
+                "dev_drive_state": "unknown",
+                "dev_drives": None,
+                "execution_started": False,
+                "errors": [f"Native Windows virtualization probe failed: {exc}"],
+            }
+        self.last_execution_started = self.last_execution_started or native.get("execution_started") is True
+        virtualization = data.setdefault("virtualization", {})
+        for field in (
+            "wsl_installed",
+            "wsl_version",
+            "dev_drive_enabled",
+            "dev_drive_state",
+            "dev_drives",
+        ):
+            virtualization[field] = native.get(field)
+        native_errors = [str(error) for error in native.get("errors", []) if error]
+        if native_errors:
+            data["success"] = False
+            data.setdefault("errors", []).extend(native_errors)
 
         try:
             snapshot = EnvironmentSnapshot.from_dict(data)
