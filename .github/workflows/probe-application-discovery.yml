@@ -76,6 +76,13 @@ jobs:
                 throw "$name did not resolve as Application through sanitized PATH"
               }
             }
+
+            $env:PATH = ""
+            $fakeEmpty = Get-Command -Name wda-fake -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            Write-Host "fake with empty PATH exists=$($null -ne $fakeEmpty)"
+            if ($null -ne $fakeEmpty) {
+              throw "Empty PATH unexpectedly resolved process-cwd fake: $($fakeEmpty.Source)"
+            }
           } finally {
             $env:PATH = $originalPath
             Remove-Item -LiteralPath $fakePath -Force -ErrorAction SilentlyContinue
