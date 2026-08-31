@@ -8,6 +8,15 @@
 
 $ErrorActionPreference = "Stop"
 
+# Native discovery may auto-load only modules shipped with this Windows
+# PowerShell installation. Ambient user/system-wide PSModulePath entries are not
+# executable authority for environment inspection.
+$WindowsModuleRoot = [IO.Path]::Combine($PSHOME, "Modules")
+if (-not [IO.Directory]::Exists($WindowsModuleRoot)) {
+    throw "Windows PowerShell module root was not established: $WindowsModuleRoot"
+}
+$env:PSModulePath = $WindowsModuleRoot
+
 $discoveryResult = @{
     timestamp = Get-Date -Format "o"
     success = $true
