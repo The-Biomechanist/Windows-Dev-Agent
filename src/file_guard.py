@@ -14,9 +14,11 @@ from typing import BinaryIO, Iterator, Optional
 
 EXECUTABLE_IDENTITY_FILE = "file"
 EXECUTABLE_IDENTITY_APP_EXECUTION_ALIAS = "app_execution_alias"
+EXECUTABLE_IDENTITY_POWERSHELL_SCRIPT = "powershell_script"
 EXECUTABLE_IDENTITY_KINDS = {
     EXECUTABLE_IDENTITY_FILE,
     EXECUTABLE_IDENTITY_APP_EXECUTION_ALIAS,
+    EXECUTABLE_IDENTITY_POWERSHELL_SCRIPT,
 }
 IO_REPARSE_TAG_APPEXECLINK = 0x8000001B
 FSCTL_GET_REPARSE_POINT = 0x000900A8
@@ -327,6 +329,13 @@ def guarded_executable_identity(
             yield
         return
 
+    if os.name == "nt":
+        is_powershell_script = requested.suffix.casefold() == ".ps1"
+        if expected_kind == EXECUTABLE_IDENTITY_POWERSHELL_SCRIPT and not is_powershell_script:
+            raise FileIdentityMismatch("reviewed PowerShell-script identity no longer names a .ps1 target")
+        if expected_kind != EXECUTABLE_IDENTITY_POWERSHELL_SCRIPT and is_powershell_script:
+            raise FileIdentityMismatch("PowerShell-script target requires powershell_script identity")
+
     with guarded_open_read(
         requested,
         exact_path=True,
@@ -368,12 +377,19 @@ def executable_identity(path: Path | str) -> Optional[ExecutableIdentity]:
     if not requested.is_absolute():
         requested = Path(os.path.abspath(str(requested)))
 
+    if os.name == "nt" and requested.suffix.casefold() in {".bat", ".cmd"}:
+        return None
     alias = _app_execution_alias_identity(requested)
     if alias is not None:
         return alias
     try:
         with guarded_open_read(requested, exact_path=True) as stream:
-            return ExecutableIdentity(kind=EXECUTABLE_IDENTITY_FILE, sha256=_hash_stream(stream))
+            kind = (
+                EXECUTABLE_IDENTITY_POWERSHELL_SCRIPT
+                if os.name == "nt" and requested.suffix.casefold() == ".ps1"
+                else EXECUTABLE_IDENTITY_FILE
+            )
+            return ExecutableIdentity(kind=kind, sha256=_hash_stream(stream))
     except OSError:
         return None
 

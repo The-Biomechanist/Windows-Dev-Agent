@@ -26,7 +26,7 @@ Package installation is `approval-required`. The executing MCP call contains the
 
 ## Boundaries
 
-- Never interpolate a package ID into a shell string. The MCP server validates it and executes an argv vector with `shell=False`.
+- Never interpolate a package ID into a shell string. The MCP server validates argv structurally, rejects `.cmd`/`.bat` command targets, and runs supported `.ps1` shims only through the identity-sealed Windows-owned PowerShell interpreter.
 - Never set `execute: true` merely to test availability.
 - Never change any `expected_executable*` identity field merely to make an old plan executable; changed path, kind, or fingerprint invalidates the plan.
 - Never claim an install succeeded without observing the installer result and a relevant post-install check.

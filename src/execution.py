@@ -11,6 +11,8 @@ import threading
 from typing import Any, BinaryIO, Optional
 
 from src.file_guard import (
+    EXECUTABLE_IDENTITY_FILE,
+    EXECUTABLE_IDENTITY_POWERSHELL_SCRIPT,
     FileBoundaryError,
     FileIdentityMismatch,
     executable_identity,
@@ -23,21 +25,16 @@ DEFAULT_STDERR_BYTES = 4_000
 _READ_CHUNK_BYTES = 8_192
 
 
-_WINDOWS_DEFAULT_PATHEXT = (".COM", ".EXE", ".BAT", ".CMD")
+_WINDOWS_COMMAND_TARGET_EXTENSIONS = (".exe", ".com", ".ps1")
+_WINDOWS_BATCH_EXTENSIONS = {".bat", ".cmd"}
 
 
 def _windows_executable_names(command: str) -> list[str]:
-    raw_extensions = os.environ.get("PATHEXT")
-    extensions = [
-        item if item.startswith(".") else "." + item
-        for item in (raw_extensions.split(os.pathsep) if raw_extensions else _WINDOWS_DEFAULT_PATHEXT)
-        if item
-    ]
-    extensions = list(dict.fromkeys(item.casefold() for item in extensions))
+    """Return only command-target forms WDA can execute without cmd.exe parsing."""
     suffix = Path(command).suffix.casefold()
-    if suffix in extensions:
-        return [command]
-    return [command + extension for extension in extensions] + [command]
+    if suffix:
+        return [command] if suffix in _WINDOWS_COMMAND_TARGET_EXTENSIONS else []
+    return [command + extension for extension in _WINDOWS_COMMAND_TARGET_EXTENSIONS]
 
 
 def _windows_path_directories() -> list[Path]:
@@ -81,6 +78,8 @@ def resolve_executable(command: str) -> Optional[str]:
         return None
     candidate = Path(raw).expanduser()
     if candidate.is_absolute():
+        if os.name == "nt" and candidate.suffix.casefold() not in _WINDOWS_COMMAND_TARGET_EXTENSIONS:
+            return None
         try:
             return str(candidate.resolve()) if candidate.is_file() else None
         except OSError:
@@ -162,6 +161,18 @@ def resolve_windows_system_executable(*names: str) -> Optional[str]:
             except OSError:
                 continue
     return None
+
+
+def _windows_powershell_interpreter():
+    path = resolve_windows_system_executable(
+        str(Path("WindowsPowerShell") / "v1.0" / "powershell.exe")
+    )
+    if path is None:
+        return None, None
+    identity = executable_identity(path)
+    if identity is None or identity.kind != EXECUTABLE_IDENTITY_FILE:
+        return None, None
+    return path, identity
 
 
 class _TailBuffer:
@@ -246,14 +257,21 @@ def launch_bound(
     stderr: Any = None,
     creationflags: int = 0,
 ) -> dict[str, Any]:
-    """Start one absolute executable while optionally sealing its reviewed identity."""
+    """Start one absolute command target while optionally sealing its reviewed identity."""
     if not argv or not isinstance(argv[0], str):
-        return {"succeeded": False, "error": "argv must contain an executable", "argv": argv, "execution_started": False}
+        return {"succeeded": False, "error": "argv must contain a command target", "argv": argv, "execution_started": False}
     executable = Path(argv[0]).expanduser()
     if not executable.is_absolute():
         return {
             "succeeded": False,
-            "error": "Executable identity must be resolved to an absolute path before execution",
+            "error": "Command-target identity must be resolved to an absolute path before execution",
+            "argv": argv,
+            "execution_started": False,
+        }
+    if os.name == "nt" and executable.suffix.casefold() not in _WINDOWS_COMMAND_TARGET_EXTENSIONS:
+        return {
+            "succeeded": False,
+            "error": f"Unsupported Windows command target: {executable.suffix or '<no extension>'}",
             "argv": argv,
             "execution_started": False,
         }
@@ -291,9 +309,41 @@ def launch_bound(
         effective_identity_kind = current_identity.kind
         effective_identity_sha256 = current_identity.sha256
 
-    def spawn() -> subprocess.Popen[bytes]:
+    is_powershell_script = os.name == "nt" and executable.suffix.casefold() == ".ps1"
+    if is_powershell_script != (effective_identity_kind == EXECUTABLE_IDENTITY_POWERSHELL_SCRIPT):
+        return {
+            "succeeded": False,
+            "error": "Current command-target type no longer matches the reviewed identity kind",
+            "argv": argv,
+            "execution_started": False,
+            "identity_mismatch": True,
+        }
+
+    launch_argv = argv
+    interpreter_path = None
+    interpreter_identity = None
+    if is_powershell_script:
+        interpreter_path, interpreter_identity = _windows_powershell_interpreter()
+        if interpreter_path is None or interpreter_identity is None:
+            return {
+                "succeeded": False,
+                "error": "Windows PowerShell interpreter identity could not be established",
+                "argv": argv,
+                "execution_started": False,
+                "identity_unavailable": True,
+            }
+        launch_argv = [
+            interpreter_path,
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(executable),
+            *argv[1:],
+        ]
+
+    def spawn(actual_argv: list[str]) -> subprocess.Popen[bytes]:
         return subprocess.Popen(
-            argv,
+            actual_argv,
             cwd=str(cwd) if cwd else None,
             stdin=stdin,
             stdout=stdout,
@@ -303,17 +353,32 @@ def launch_bound(
         )
 
     try:
-        # Every launch seals the current executable object through CreateProcess.
-        # Plan-first callers additionally supply an earlier reviewed identity, so
-        # this same guard both preserves that cross-call contract and closes the
-        # final check-to-spawn window. Non-plan probes snapshot the current typed
-        # identity immediately above and receive the same use-time protection.
+        # Every launch seals the reviewed command target through process creation.
+        # PowerShell-script targets additionally seal the Windows-owned interpreter
+        # while it starts; cmd.exe is never used for target argument parsing.
         with guarded_executable_identity(
             executable,
             expected_kind=effective_identity_kind,
             expected_sha256=effective_identity_sha256,
         ):
-            process = spawn()
+            if interpreter_path is not None and interpreter_identity is not None:
+                try:
+                    with guarded_executable_identity(
+                        interpreter_path,
+                        expected_kind=interpreter_identity.kind,
+                        expected_sha256=interpreter_identity.sha256,
+                    ):
+                        process = spawn(launch_argv)
+                except (FileIdentityMismatch, FileBoundaryError) as exc:
+                    return {
+                        "succeeded": False,
+                        "error": f"Windows PowerShell interpreter changed before launch: {exc}",
+                        "argv": argv,
+                        "execution_started": False,
+                        "runtime_identity_mismatch": True,
+                    }
+            else:
+                process = spawn(launch_argv)
     except (FileIdentityMismatch, FileBoundaryError) as exc:
         return {
             "succeeded": False,
@@ -337,7 +402,7 @@ def run_bounded(
     expected_executable_identity_kind: Optional[str] = None,
     expected_executable_identity_sha256: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Execute an absolute argv[0] while retaining only bounded stdout/stderr tails."""
+    """Execute an absolute typed command target while retaining bounded output tails."""
     stdout_tail = _TailBuffer(stdout_bytes)
     stderr_tail = _TailBuffer(stderr_bytes)
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0

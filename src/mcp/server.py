@@ -81,15 +81,15 @@ def _expected_executable_property() -> dict[str, Any]:
     return {
         "type": "string",
         "maxLength": 4096,
-        "description": "Absolute executable path returned by the reviewed execute=false plan; required when execute=true",
+        "description": "Absolute command-target path returned by the reviewed execute=false plan; required when execute=true",
     }
 
 
 def _expected_executable_identity_kind_property() -> dict[str, Any]:
     return {
         "type": "string",
-        "enum": ["file", "app_execution_alias"],
-        "description": "Executable identity kind returned by the reviewed execute=false plan; required when execute=true",
+        "enum": ["file", "app_execution_alias", "powershell_script"],
+        "description": "Command-target identity kind returned by the reviewed execute=false plan; required when execute=true",
     }
 
 

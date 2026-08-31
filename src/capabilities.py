@@ -1,8 +1,9 @@
 """Small executable capability registry for Windows Dev Agent.
 
-The catalog is JSON and uses only the Python standard library. Commands are argv
-vectors and never execute through a host shell. Executable identity is resolved
-once and the exact absolute path is carried into execution.
+The catalog is JSON and uses only the Python standard library. Commands remain argv
+vectors. Native targets execute directly; Windows PowerShell-script shims execute only
+through the Windows-owned PowerShell interpreter, while .cmd/.bat targets are rejected.
+Command-target identity is resolved once and carried into execution.
 
 Host permission is deliberately not represented as a model-supplied field. An
 MCP client requests execution with ``execute=true``; Claude Code or Codex then
