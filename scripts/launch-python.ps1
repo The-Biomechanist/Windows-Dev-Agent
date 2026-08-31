@@ -41,7 +41,8 @@ function Add-PythonCandidate {
 }
 
 # A host may supply one already-resolved interpreter identity. Relative values are
-# rejected so this cannot reintroduce current-directory or PATH shadowing.
+# rejected so this cannot reintroduce current-directory or PATH shadowing. When
+# present, the override is authoritative and no competing installation is scanned.
 if ($ExplicitOverridePresent) {
     if (-not (Test-FullyQualifiedWindowsPath $env:WINDOWS_DEV_AGENT_PYTHON)) {
         [Console]::Error.WriteLine('WINDOWS_DEV_AGENT_PYTHON must be an absolute python.exe path.')
@@ -52,42 +53,42 @@ if ($ExplicitOverridePresent) {
         [Console]::Error.WriteLine('WINDOWS_DEV_AGENT_PYTHON did not identify an existing python.exe file.')
         exit 70
     }
-}
-
-# Prefer installation authorities that do not search the current project or PATH.
-$RegistryRoots = @(
-    'Registry::HKEY_CURRENT_USER\Software\Python\PythonCore',
-    'Registry::HKEY_LOCAL_MACHINE\Software\Python\PythonCore',
-    'Registry::HKEY_LOCAL_MACHINE\Software\WOW6432Node\Python\PythonCore'
-)
-foreach ($Root in $RegistryRoots) {
-    if (-not (Test-Path -LiteralPath $Root)) { continue }
-    foreach ($VersionKey in Get-ChildItem -LiteralPath $Root -ErrorAction SilentlyContinue) {
-        $InstallKey = Join-Path $VersionKey.PSPath 'InstallPath'
-        if (-not (Test-Path -LiteralPath $InstallKey)) { continue }
-        try {
-            $Properties = Get-ItemProperty -LiteralPath $InstallKey -ErrorAction Stop
-            Add-PythonCandidate $Properties.ExecutablePath
-            $DefaultPath = (Get-Item -LiteralPath $InstallKey -ErrorAction Stop).GetValue('')
-            if ($DefaultPath) {
-                Add-PythonCandidate (Join-Path ([string]$DefaultPath) 'python.exe')
+} else {
+    # Prefer installation authorities that do not search the current project or PATH.
+    $RegistryRoots = @(
+        'Registry::HKEY_CURRENT_USER\Software\Python\PythonCore',
+        'Registry::HKEY_LOCAL_MACHINE\Software\Python\PythonCore',
+        'Registry::HKEY_LOCAL_MACHINE\Software\WOW6432Node\Python\PythonCore'
+    )
+    foreach ($Root in $RegistryRoots) {
+        if (-not (Test-Path -LiteralPath $Root)) { continue }
+        foreach ($VersionKey in Get-ChildItem -LiteralPath $Root -ErrorAction SilentlyContinue) {
+            $InstallKey = Join-Path $VersionKey.PSPath 'InstallPath'
+            if (-not (Test-Path -LiteralPath $InstallKey)) { continue }
+            try {
+                $Properties = Get-ItemProperty -LiteralPath $InstallKey -ErrorAction Stop
+                Add-PythonCandidate $Properties.ExecutablePath
+                $DefaultPath = (Get-Item -LiteralPath $InstallKey -ErrorAction Stop).GetValue('')
+                if ($DefaultPath) {
+                    Add-PythonCandidate (Join-Path ([string]$DefaultPath) 'python.exe')
+                }
+            } catch {
+                continue
             }
-        } catch {
-            continue
         }
     }
-}
 
-$InstallParents = @(
-    (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\Python'),
-    ([Environment]::GetFolderPath('ProgramFiles')),
-    ([Environment]::GetFolderPath('ProgramFilesX86'))
-) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-foreach ($Parent in $InstallParents) {
-    if (-not (Test-Path -LiteralPath $Parent -PathType Container)) { continue }
-    foreach ($Directory in Get-ChildItem -LiteralPath $Parent -Directory -ErrorAction SilentlyContinue) {
-        if ($Parent -like '*\Programs\Python' -or $Directory.Name -like 'Python*') {
-            Add-PythonCandidate (Join-Path $Directory.FullName 'python.exe')
+    $InstallParents = @(
+        (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\Python'),
+        ([Environment]::GetFolderPath('ProgramFiles')),
+        ([Environment]::GetFolderPath('ProgramFilesX86'))
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    foreach ($Parent in $InstallParents) {
+        if (-not (Test-Path -LiteralPath $Parent -PathType Container)) { continue }
+        foreach ($Directory in Get-ChildItem -LiteralPath $Parent -Directory -ErrorAction SilentlyContinue) {
+            if ($Parent -like '*\Programs\Python' -or $Directory.Name -like 'Python*') {
+                Add-PythonCandidate (Join-Path $Directory.FullName 'python.exe')
+            }
         }
     }
 }
