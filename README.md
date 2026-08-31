@@ -4,7 +4,7 @@ Windows-native development orchestration for **Claude Code and Codex**.
 
 Windows Dev Agent (WDA) gives an agent a small, shared runtime for inspecting a Windows development environment, routing project work, resolving and installing system packages, choosing an appropriate isolation boundary, and auditing the resulting actions without turning host permission into a model-controlled flag.
 
-The runtime is local, Python-standard-library-only, and designed around explicit Windows authority boundaries: the host owns permission, project scope comes from the host adapter, external effects are not inferred from requests, and unavailable or unobserved state remains unknown rather than being guessed.
+The runtime is local, Python-standard-library-only, and designed around explicit Windows authority boundaries: the host owns permission, Claude supplies host-attested project scope, trusted Codex hooks bind project-scoped calls to Codex's host event `cwd`, external effects are not inferred from requests, and unavailable or unobserved state remains unknown rather than being guessed. Without trusted Codex hooks, WDA requires an explicit absolute project path but does not misrepresent that caller-selected value as host-attested scope.
 
 ## What it adds
 
@@ -61,6 +61,8 @@ The published marketplace entry is pinned to an immutable payload commit. Instal
 Codex uses the installed plugin root as the MCP server's startup working directory so the relative launcher path resolves inside plugin code. That startup directory is **not** treated as project identity: project-scoped WDA tools still require the current absolute Codex project directory explicitly.
 
 Codex plugin hooks are an additional trusted layer, not a replacement for native permissions. Until the user trusts those hooks, Codex's own MCP/shell approval policy remains the operative boundary. Mutation-capable WDA tools remain prompt-gated. Codex executes command hooks from the active request working directory, so WDA's Windows hook commands invoke `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` explicitly instead of resolving a bare `powershell.exe` from that project directory. The hook command line stays quote-free for compatibility with Codex's current Windows `cmd.exe /C` hook transport.
+
+Codex's current plugin MCP configuration roots relative `cwd` to the installed plugin but does not provide a portable Windows-system placeholder for the stdio `command`. The initial Codex MCP bootstrap therefore still names `powershell.exe` and inherits host command resolution from the plugin startup directory/PATH. WDA does not hard-code `C:\Windows`: a drive-independent `\\?\GLOBALROOT\SystemRoot\...\powershell.exe` candidate is a valid Win32 file path but was rejected by Rust `std::process::Command` with Win32 error 87 in a Windows probe. After bootstrap, WDA-owned Windows control-plane launches and trusted Codex hooks use independently rooted Windows system binaries.
 
 ## Python bootstrap
 
