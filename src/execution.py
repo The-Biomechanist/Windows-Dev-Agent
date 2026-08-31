@@ -181,13 +181,19 @@ class _TailBuffer:
         self.limit = max(0, int(limit))
         self._chunks: deque[bytes] = deque()
         self._size = 0
+        self._truncated = False
         self._lock = threading.Lock()
 
     def append(self, chunk: bytes) -> None:
-        if not chunk or self.limit == 0:
+        if not chunk:
             return
         with self._lock:
+            if self.limit == 0:
+                self._truncated = True
+                return
             if len(chunk) >= self.limit:
+                if self._size > 0 or len(chunk) > self.limit:
+                    self._truncated = True
                 self._chunks.clear()
                 self._chunks.append(chunk[-self.limit :])
                 self._size = self.limit
@@ -195,6 +201,7 @@ class _TailBuffer:
             self._chunks.append(chunk)
             self._size += len(chunk)
             while self._size > self.limit and self._chunks:
+                self._truncated = True
                 excess = self._size - self.limit
                 first = self._chunks[0]
                 if len(first) <= excess:
@@ -203,6 +210,11 @@ class _TailBuffer:
                 else:
                     self._chunks[0] = first[excess:]
                     self._size -= excess
+
+    @property
+    def truncated(self) -> bool:
+        with self._lock:
+            return self._truncated
 
     def text(self) -> str:
         with self._lock:
@@ -529,6 +541,8 @@ def run_bounded(
         "execution_started": True,
         "output_capture_complete": output_capture_complete,
         "output_capture_settled": output_capture_settled,
+        "stdout_truncated": stdout_tail.truncated,
+        "stderr_truncated": stderr_tail.truncated,
     }
     if timed_out:
         result["timed_out"] = True

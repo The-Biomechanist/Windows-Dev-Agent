@@ -115,7 +115,7 @@ The cache uses the same canonical snapshot representation, is capped at 1 MiB, w
 
 WDA resolves the selected package-manager command target into an absolute path and typed identity for the plan. `package_install(execute:false)` returns `executable`, `executable_identity_kind`, and `executable_identity_sha256` with the exact target argv for review. An executing call must pass all three back through their `expected_*` fields; WDA re-resolves and re-fingerprints the current package-manager target and refuses to launch with `stale_plan` if it no longer matches. The bounded runner then holds the verified native file, App Execution Alias, or PowerShell script target stable through process creation; script targets also bind the Windows-owned PowerShell interpreter. There is no third PATH lookup, implicit `cmd.exe` batch path, or unguarded check-to-launch gap.
 
-`package_search` can contact the package manager's configured source and therefore remains host-controlled even though it is non-mutating by intent. WinGet installation is bound to the `winget` source and runs non-interactively.
+`package_search` can contact the package manager's configured source and therefore remains host-controlled even though it is non-mutating by intent. A zero-exit search whose stdout capture was incomplete or truncated returns `status: incomplete` rather than presenting the retained tail as a complete result. WinGet installation is bound to the `winget` source and runs non-interactively.
 
 Installer exit status is not proof that the requested development task now works. Re-inspect or verify the actual post-state that matters.
 
@@ -128,7 +128,7 @@ All captured subprocess execution goes through one bounded runner. It:
 - snapshots the current typed command-target identity for ordinary probes and holds that exact native file, App Execution Alias, or PowerShell script through process creation;
 - for plan-first execution, additionally requires the earlier reviewed typed identity fingerprint to match before launch;
 - disconnects child stdin from the MCP transport;
-- streams stdout/stderr while retaining only bounded tails in memory; receipts distinguish clean output EOF (`output_capture_complete`) from whether all drain threads were settled before publication (`output_capture_settled`);
+- streams stdout/stderr while retaining only bounded tails in memory; receipts distinguish clean output EOF (`output_capture_complete`), reader settlement (`output_capture_settled`), and whether either retained tail discarded earlier bytes (`stdout_truncated` / `stderr_truncated`); consumers that derive facts from captured text require the relevant stream to be complete, settled, and non-truncated;
 - on Windows, cancels still-blocked synchronous drain reads after a short post-process grace period rather than returning with live reader threads; forced cancellation is settled but not reported as complete capture;
 - applies a runtime timeout;
 - preserves whether execution actually started;

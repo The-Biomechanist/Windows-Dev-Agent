@@ -375,12 +375,36 @@ _TOOL_DISCOVERY_PROBES: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
 }
 
 
+def _captured_stream_is_complete(result: dict[str, Any], stream: str) -> bool:
+    if stream not in {"stdout", "stderr"}:
+        raise ValueError(f"unsupported captured stream: {stream}")
+    return (
+        result.get("output_capture_complete") is True
+        and result.get("output_capture_settled") is True
+        and result.get(f"{stream}_truncated") is False
+    )
+
+
 def _discover_tool_version(path: str, source: str, version_argv: tuple[str, ...]) -> tuple[Optional[str], bool]:
     if source == "windows_file_version":
         return windows_file_version(path), False
     probe = run_bounded([path, *version_argv], timeout=5)
-    lines = (probe.get("stdout") or probe.get("stderr") or "").strip().splitlines()
-    version = lines[0] if probe.get("succeeded") and lines else None
+    stdout = str(probe.get("stdout") or "")
+    stderr = str(probe.get("stderr") or "")
+    if stdout.strip():
+        evidence = stdout
+        stream = "stdout"
+    else:
+        evidence = stderr
+        stream = "stderr"
+    lines = evidence.strip().splitlines()
+    version = (
+        lines[0]
+        if probe.get("succeeded")
+        and _captured_stream_is_complete(probe, stream)
+        and lines
+        else None
+    )
     return version, probe.get("execution_started") is True
 
 
@@ -609,7 +633,16 @@ async def handle_package_search(args: dict[str, Any]) -> dict[str, Any]:
     if argv is None:
         return {"status": "unavailable", "source": source, "error": f"{configured[0]} is not installed"}
     result = run_bounded(argv, timeout=90)
-    return {"status": "completed" if result.get("succeeded") else "failed", "query": query, "source": source, **result}
+    if not result.get("succeeded"):
+        status = "failed"
+    elif _captured_stream_is_complete(result, "stdout"):
+        status = "completed"
+    else:
+        status = "incomplete"
+    response = {"status": status, "query": query, "source": source, **result}
+    if status == "incomplete":
+        response["warning"] = "Package search process succeeded but result output was incomplete or truncated"
+    return response
 
 
 async def handle_package_install(args: dict[str, Any]) -> dict[str, Any]:
@@ -1285,8 +1318,10 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
         if code:
             result = run_bounded([code, "--list-extensions"], timeout=20)
             execution_started = execution_started or result.get("execution_started") is True
-            if result.get("succeeded"):
+            if result.get("succeeded") and _captured_stream_is_complete(result, "stdout"):
                 inventory["vscode"]["installed"] = [line for line in result.get("stdout", "").splitlines() if line]
+            elif result.get("succeeded"):
+                inventory["warnings"].append("VS Code extension inventory output was incomplete or truncated")
             else:
                 inventory["warnings"].append("VS Code extension inventory failed")
         plugin_dir = Path.home() / ".claude" / "plugins"
@@ -1301,8 +1336,10 @@ async def handle_ecosystem_scan(args: dict[str, Any]) -> dict[str, Any]:
             if winget:
                 result = run_bounded([winget, "list", "--source", "winget", "--disable-interactivity"], timeout=90, stdout_bytes=64 * 1024)
                 execution_started = execution_started or result.get("execution_started") is True
-                if result.get("succeeded"):
+                if result.get("succeeded") and _captured_stream_is_complete(result, "stdout"):
                     inventory["packages"]["items"] = result.get("stdout", "").splitlines()[:300]
+                elif result.get("succeeded"):
+                    inventory["warnings"].append("winget list output was incomplete or truncated")
                 else:
                     inventory["warnings"].append("winget list failed")
             else:

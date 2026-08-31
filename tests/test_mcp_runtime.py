@@ -125,6 +125,10 @@ def test_package_search_executes_the_exact_resolved_binary(monkeypatch):
             "stderr": "",
             "argv": argv,
             "execution_started": True,
+            "output_capture_complete": True,
+            "output_capture_settled": True,
+            "stdout_truncated": False,
+            "stderr_truncated": False,
         }
 
     monkeypatch.setattr(server, "run_bounded", fake_run)

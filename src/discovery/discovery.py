@@ -181,6 +181,14 @@ class EnvironmentDiscovery:
             return self._fallback_discovery(
                 f"System Windows PowerShell could not start: {result.get('error', 'unknown launch error')}"
             )
+        if (
+            result.get("output_capture_complete") is not True
+            or result.get("output_capture_settled") is not True
+            or result.get("stdout_truncated") is not False
+        ):
+            return self._fallback_discovery(
+                "PowerShell discovery output evidence was incomplete or truncated"
+            )
 
         stdout = str(result.get("stdout", ""))
         stderr = str(result.get("stderr", ""))
