@@ -24,7 +24,13 @@ def load_events(
     target = log_file or resolve_log_file()
     events: list[dict[str, Any]] = []
     for source in history_log_files(target):
-        for line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            # Audit reporting is best-effort over retained history. Rotation or an
+            # unreadable predecessor must not turn a Stop hook into an execution blocker.
+            continue
+        for line in lines:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError:

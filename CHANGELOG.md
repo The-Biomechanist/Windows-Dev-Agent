@@ -38,6 +38,7 @@ Production-hardening and public-release cleanup.
 - Add bounded atomic discovery cache writes, a Windows interprocess cache lock, and mutation-generation protection against stale cache resurrection.
 - Fail package-install execution closed when the cache mutation/invalidation transition cannot be established before launch.
 - Serialize audit rotation/append between Windows hook processes.
+- Make session/persistent audit summaries best-effort across retained log segments: a rotated predecessor that disappears or becomes unreadable after enumeration is skipped while remaining readable evidence is preserved, so Stop-time reporting does not become an execution blocker.
 - Add audit schema version and explicit lifecycle fields while preserving legacy log readability.
 - Classify rejected `stale_plan` requests as `not_executed`, distinct from runtime execution failure.
 - Stop exposing the physical WDA data directory from `logs_query`.
