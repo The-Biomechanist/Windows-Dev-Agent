@@ -227,18 +227,25 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
     if os.name == "nt":
         taskkill = resolve_windows_system_executable("taskkill.exe")
         if taskkill:
-            try:
-                subprocess.run(
-                    [taskkill, "/PID", str(process.pid), "/T", "/F"],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    shell=False,
-                    check=False,
-                    timeout=10,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+            cleanup_launch = launch_bound(
+                [taskkill, "/PID", str(process.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            cleanup_process = cleanup_launch.get("process")
+            if cleanup_process is not None:
+                try:
+                    cleanup_process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    try:
+                        cleanup_process.kill()
+                    except OSError:
+                        pass
+                    try:
+                        cleanup_process.wait(timeout=2)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
     if process.poll() is None:
         try:
             process.kill()
