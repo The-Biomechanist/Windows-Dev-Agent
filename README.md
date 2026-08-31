@@ -128,7 +128,8 @@ All captured subprocess execution goes through one bounded runner. It:
 - snapshots the current typed command-target identity for ordinary probes and holds that exact native file, App Execution Alias, or PowerShell script through process creation;
 - for plan-first execution, additionally requires the earlier reviewed typed identity fingerprint to match before launch;
 - disconnects child stdin from the MCP transport;
-- streams stdout/stderr while retaining only bounded tails in memory;
+- streams stdout/stderr while retaining only bounded tails in memory; receipts distinguish clean output EOF (`output_capture_complete`) from whether all drain threads were settled before publication (`output_capture_settled`);
+- on Windows, cancels still-blocked synchronous drain reads after a short post-process grace period rather than returning with live reader threads; forced cancellation is settled but not reported as complete capture;
 - applies a runtime timeout;
 - preserves whether execution actually started;
 - attempts process-tree termination on Windows after timeout.
