@@ -83,7 +83,9 @@ class VirtualizationInfo:
     wsl_distros: List[str] = field(default_factory=list)
     windows_sandbox_available: Optional[bool] = None
     windows_sandbox_state: str = "unknown"
-    dev_drives: List[DevDrive] = field(default_factory=list)
+    dev_drive_enabled: Optional[bool] = None
+    dev_drive_state: str = "unknown"
+    dev_drives: Optional[List[DevDrive]] = None
 
     def has_wsl(self) -> bool:
         return self.wsl_installed is True
@@ -217,7 +219,9 @@ class EnvironmentSnapshot:
                 "wsl_distros": list(self.virtualization.wsl_distros),
                 "windows_sandbox_available": self.virtualization.windows_sandbox_available,
                 "windows_sandbox_state": self.virtualization.windows_sandbox_state,
-                "dev_drives": [
+                "dev_drive_enabled": self.virtualization.dev_drive_enabled,
+                "dev_drive_state": self.virtualization.dev_drive_state,
+                "dev_drives": None if self.virtualization.dev_drives is None else [
                     {
                         "drive_letter": drive.drive_letter,
                         "label": drive.label,
@@ -249,6 +253,7 @@ class EnvironmentSnapshot:
                 "hyper_v": availability_state(self.virtualization.hyper_v_available),
                 "wsl": availability_state(self.virtualization.wsl_installed),
                 "windows_sandbox": availability_state(self.virtualization.windows_sandbox_available),
+                "dev_drive": availability_state(self.virtualization.dev_drive_enabled),
                 "winget": availability_state(self.development_tools.winget_available),
                 "git": availability_state(self.development_tools.git_available),
             },
@@ -262,7 +267,8 @@ class EnvironmentSnapshot:
     def from_dict(cls, data: Dict[str, Any]) -> "EnvironmentSnapshot":
         system = SystemInfo(**dict(data.get("system", {})))
         virt_data = dict(data.get("virtualization", {}))
-        dev_drives = [DevDrive(**drive) for drive in virt_data.pop("dev_drives", [])]
+        raw_dev_drives = virt_data.pop("dev_drives", None)
+        dev_drives = None if raw_dev_drives is None else [DevDrive(**drive) for drive in raw_dev_drives]
         virtualization = VirtualizationInfo(**virt_data, dev_drives=dev_drives)
         development_tools = DevelopmentTools(**dict(data.get("development_tools", {})))
         runtimes_data = data.get("runtimes", {})
