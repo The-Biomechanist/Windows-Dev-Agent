@@ -14,6 +14,7 @@ from typing import Any, BinaryIO, Optional
 from src.file_guard import (
     FileBoundaryError,
     FileIdentityMismatch,
+    executable_identity,
     guarded_executable_identity,
     valid_executable_identity,
 )
@@ -196,17 +197,32 @@ def launch_bound(
         return {"succeeded": False, "error": str(exc), "argv": argv, "execution_started": False}
 
     identity_requested = expected_executable_identity_kind is not None or expected_executable_identity_sha256 is not None
-    if identity_requested and not valid_executable_identity(
-        expected_executable_identity_kind,
-        expected_executable_identity_sha256,
-    ):
-        return {
-            "succeeded": False,
-            "error": "expected executable identity is malformed",
-            "argv": argv,
-            "execution_started": False,
-            "identity_invalid": True,
-        }
+    if identity_requested:
+        if not valid_executable_identity(
+            expected_executable_identity_kind,
+            expected_executable_identity_sha256,
+        ):
+            return {
+                "succeeded": False,
+                "error": "expected executable identity is malformed",
+                "argv": argv,
+                "execution_started": False,
+                "identity_invalid": True,
+            }
+        effective_identity_kind = expected_executable_identity_kind
+        effective_identity_sha256 = expected_executable_identity_sha256
+    else:
+        current_identity = executable_identity(executable)
+        if current_identity is None:
+            return {
+                "succeeded": False,
+                "error": "Executable identity could not be established at launch",
+                "argv": argv,
+                "execution_started": False,
+                "identity_unavailable": True,
+            }
+        effective_identity_kind = current_identity.kind
+        effective_identity_sha256 = current_identity.sha256
 
     def spawn() -> subprocess.Popen[bytes]:
         return subprocess.Popen(
@@ -220,18 +236,17 @@ def launch_bound(
         )
 
     try:
-        if not identity_requested:
+        # Every launch seals the current executable object through CreateProcess.
+        # Plan-first callers additionally supply an earlier reviewed identity, so
+        # this same guard both preserves that cross-call contract and closes the
+        # final check-to-spawn window. Non-plan probes snapshot the current typed
+        # identity immediately above and receive the same use-time protection.
+        with guarded_executable_identity(
+            executable,
+            expected_kind=effective_identity_kind,
+            expected_sha256=effective_identity_sha256,
+        ):
             process = spawn()
-        else:
-            # Keep the exact reviewed object stable through CreateProcess. A normal
-            # executable is byte-hashed; an App Execution Alias is fingerprinted
-            # from its reparse payload and held open as that reparse object.
-            with guarded_executable_identity(
-                executable,
-                expected_kind=expected_executable_identity_kind,
-                expected_sha256=expected_executable_identity_sha256,
-            ):
-                process = spawn()
     except (FileIdentityMismatch, FileBoundaryError) as exc:
         return {
             "succeeded": False,

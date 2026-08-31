@@ -123,14 +123,16 @@ Installer exit status is not proof that the requested development task now works
 
 All captured subprocess execution goes through one bounded runner. It:
 
-- requires an absolute executable path and, for plan-first execution, the reviewed typed identity fingerprint;
+- requires an absolute executable path;
+- snapshots the current typed executable identity for ordinary probes and holds that exact file or App Execution Alias object through process creation;
+- for plan-first execution, additionally requires the earlier reviewed typed identity fingerprint to match before launch;
 - disconnects child stdin from the MCP transport;
 - streams stdout/stderr while retaining only bounded tails in memory;
 - applies a runtime timeout;
 - preserves whether execution actually started;
 - attempts process-tree termination on Windows after timeout.
 
-For plan-first execution, executable path and typed identity material are checked before mutation/staging/launch and the verified executable object is held through process creation. A stale reviewed plan is `not_executed`, not an execution failure.
+Every captured external launch therefore closes the resolve-to-spawn same-path replacement window. Plan-first execution adds the stronger cross-call check: reviewed path and typed identity material are checked before mutation/staging/launch, then that verified object is held through process creation. A stale reviewed plan is `not_executed`, not an execution failure.
 
 Timeout after launch is not treated as proof of failure-with-no-effect: partial external mutation may already have occurred, so audit state can remain `unknown`.
 
