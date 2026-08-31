@@ -109,17 +109,18 @@ jobs:
       - name: Remove temporary probe machinery and commit materialized repair
         shell: pwsh
         run: |
-          git rm -f --ignore-unmatch `
-            .github/apply_native_discovery_authority.py `
-            .github/apply_native_discovery_docs.py `
-            .github/workflows/probe-native-discovery.yml `
-            .github/workflows/materialize-native-discovery.yml
+          $temporary = @(
+            ".github/apply_native_discovery_authority.py",
+            ".github/apply_native_discovery_docs.py",
+            ".github/workflows/probe-native-discovery.yml",
+            ".github/workflows/materialize-native-discovery.yml"
+          )
+          git rm -f --ignore-unmatch -- $temporary
           git add -A
           git diff --cached --check
-          $names = @(git diff --cached --name-only)
-          $residue = @($names | Where-Object { $_ -match '^\.github/(apply_native_discovery|workflows/(probe-native-discovery|materialize-native-discovery))' })
+          $residue = @($temporary | Where-Object { Test-Path -LiteralPath $_ })
           if ($residue.Count -gt 0) {
-            throw "temporary discovery machinery would enter final tree: $($residue -join ', ')"
+            throw "temporary discovery machinery remains in resulting tree: $($residue -join ', ')"
           }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
