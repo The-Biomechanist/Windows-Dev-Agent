@@ -80,6 +80,48 @@ def test_native_discovery_script_emits_truth_preserving_json():
     assert "powershell_modules" not in payload
 
 
+
+
+def test_broad_tool_presence_uses_native_application_resolution_with_wda_path_policy():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "Get-WdaApplicationSearchPath" in text
+    assert "Get-Command -Name $Name -CommandType Application" in text
+    assert "[Environment]::CurrentDirectory" in text
+    assert "[IO.Path]::IsPathRooted" in text
+    assert "$env:PATH = [string]$script:WdaApplicationSearchPath.path" in text
+    assert "$env:PATH = $originalPath" in text
+
+
+def test_broad_tool_presence_rejects_alias_function_and_process_cwd_application(tmp_path: Path):
+    fake = tmp_path / "wda-fake.exe"
+    fake.write_bytes(b"not-an-executable")
+    original_path = __import__("os").environ.get("PATH", "")
+    command = rf'''
+$ErrorActionPreference = 'Stop'
+$env:PATH = '.;{tmp_path};' + $env:PATH
+$null = . '{SCRIPT}'
+function wda-function-only {{ 'function' }}
+Set-Alias -Name wda-alias-only -Value Get-Date
+if (Test-CommandAvailable 'wda-function-only') {{ throw 'function counted as application' }}
+if (Test-CommandAvailable 'wda-alias-only') {{ throw 'alias counted as application' }}
+if (Test-CommandAvailable 'wda-fake') {{ throw 'process cwd application was trusted' }}
+if (-not (Test-CommandAvailable 'python')) {{ throw 'real PATH application was lost' }}
+'''
+    env = dict(__import__("os").environ)
+    env["PATH"] = ".;" + str(tmp_path) + ";" + original_path
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+        cwd=tmp_path,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
 def test_native_environment_discovery_round_trips_its_own_output(tmp_path: Path):
     snapshot = EnvironmentDiscovery(cache_enabled=True, data_dir=tmp_path).discover(force_refresh=True)
     cached = json.loads((tmp_path / "environment.json").read_text(encoding="utf-8"))
