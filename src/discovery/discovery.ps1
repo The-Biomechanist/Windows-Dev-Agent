@@ -92,6 +92,45 @@ function Test-CommandAvailable {
     }
 }
 
+function Get-VisualStudioAvailability {
+    # A resolved devenv.exe is direct positive evidence. Otherwise use the
+    # Visual Studio Installer's maintained native locator. A missing locator
+    # does not prove Visual Studio absent, so preserve unknown.
+    $devenvAvailable = Test-CommandAvailable "devenv"
+    if ($devenvAvailable -eq $true) { return $true }
+
+    $locatorCandidates = @()
+    foreach ($folderName in @("ProgramFilesX86", "ProgramFiles")) {
+        try {
+            $programFiles = [Environment]::GetFolderPath($folderName)
+        }
+        catch {
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($programFiles)) { continue }
+        $candidate = [IO.Path]::Combine($programFiles, "Microsoft Visual Studio", "Installer", "vswhere.exe")
+        if ($locatorCandidates -notcontains $candidate) {
+            $locatorCandidates += $candidate
+        }
+    }
+
+    $locator = $locatorCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $locator) { return $null }
+
+    try {
+        $installationPath = & $locator -prerelease -latest -property installationPath 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Add-DiscoveryError "Visual Studio Installer locator exited $LASTEXITCODE"
+            return $null
+        }
+        return -not [string]::IsNullOrWhiteSpace(([string]($installationPath | Select-Object -First 1)))
+    }
+    catch {
+        Add-DiscoveryError "Visual Studio installation state was not established: $($_.Exception.Message)"
+        return $null
+    }
+}
+
 function Get-OptionalFeatureProbe {
     param([string]$FeatureName)
     try {
@@ -505,6 +544,7 @@ $discoveryResult.virtualization = @{
 
 # Package managers and development tools: presence only. Version details are
 # intentionally delegated to the focused tool_discover MCP tool.
+$visualStudioAvailable = Get-VisualStudioAvailability
 try {
     $discoveryResult.development_tools = @{
         winget_available = Test-CommandAvailable "winget"
@@ -513,7 +553,7 @@ try {
         git_available = Test-CommandAvailable "git"
         docker_available = Test-CommandAvailable "docker"
         vscode_available = (Test-CommandAvailable "code") -or (Test-Path "C:\Program Files\Microsoft VS Code\Code.exe")
-        visual_studio_available = (Test-CommandAvailable "devenv") -or (Test-Path "C:\Program Files\Microsoft Visual Studio")
+        visual_studio_available = $visualStudioAvailable
     }
 }
 catch {
@@ -552,7 +592,7 @@ $discoveryResult.git = @{
 try {
     $discoveryResult.editors = @{
         visual_studio_code = (Test-CommandAvailable "code") -or (Test-Path "C:\Program Files\Microsoft VS Code\Code.exe")
-        visual_studio = (Test-CommandAvailable "devenv") -or (Test-Path "C:\Program Files\Microsoft Visual Studio")
+        visual_studio = $visualStudioAvailable
         jetbrains_rider = [bool](Get-ChildItem "C:\Program Files\JetBrains\Rider*" -ErrorAction SilentlyContinue | Select-Object -First 1)
         jetbrains_pycharm = [bool](Get-ChildItem "C:\Program Files\JetBrains\PyCharm*" -ErrorAction SilentlyContinue | Select-Object -First 1)
         jetbrains_clion = [bool](Get-ChildItem "C:\Program Files\JetBrains\CLion*" -ErrorAction SilentlyContinue | Select-Object -First 1)
