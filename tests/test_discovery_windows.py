@@ -82,6 +82,34 @@ def test_native_discovery_script_emits_truth_preserving_json():
 
 
 
+def test_visual_studio_presence_uses_installer_locator_not_directory_name():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "Get-VisualStudioAvailability" in text
+    assert "Microsoft Visual Studio\\Installer\\vswhere.exe" in text
+    assert "-prerelease -latest -property installationPath" in text
+    assert 'Test-Path "C:\\Program Files\\Microsoft Visual Studio"' not in text
+    assert "visual_studio_available = $visualStudioAvailable" in text
+    assert "visual_studio = $visualStudioAvailable" in text
+
+
+def test_visual_studio_locator_establishes_hosted_runner_instance():
+    command = rf'''
+$ErrorActionPreference = 'Stop'
+$null = . '{SCRIPT}'
+$result = Get-VisualStudioAvailability
+if ($result -ne $true) {{ throw "Visual Studio locator did not establish hosted IDE instance: $result" }}
+'''
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
 def test_broad_tool_presence_uses_native_application_resolution_with_wda_path_policy():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "Get-WdaApplicationSearchPath" in text
