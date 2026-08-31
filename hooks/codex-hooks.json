@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(Bash|mcp__windows_dev_agent__(capability_run|package_install|sandbox_run))$",
+        "matcher": "^(Bash|mcp__windows_dev_agent__(capability_run|workflow_plan|package_install|sandbox_run|ecosystem_scan|mcp_audit))$",
         "hooks": [
           {
             "type": "command",

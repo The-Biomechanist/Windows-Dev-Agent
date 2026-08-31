@@ -56,7 +56,7 @@ Windows-owned control-plane executables used by the runtime—such as WSL, Windo
 
 ### Project scope is not permission to follow links anywhere
 
-Project-scoped reads are bounded to the host project and reject symbolic-link/NTFS-reparse traversal at the relevant read/staging boundary. Project JSON is consumed from the same use-time verified handle whose final path is checked, and Windows Sandbox payload staging revalidates file/directory identities and budgets while copying. Failure to establish reparse metadata is not treated as proof that a path is ordinary.
+Claude project-scoped reads are bounded to the host project. Codex receives its host-attested project `cwd` through hook events rather than the MCP process; when the bundled Codex hooks are trusted, `PreToolUse` independently denies project-scoped calls whose requested directory resolves outside that host cwd. Without trusted Codex hooks, the required absolute project path is caller-selected and remains on Codex's prompt surface, so host-attested project confinement is not claimed for that fallback path. Within an established project boundary, WDA rejects symbolic-link/NTFS-reparse traversal at the relevant read/staging boundary. Project JSON is consumed from the same use-time verified handle whose final path is checked, and Windows Sandbox payload staging revalidates file/directory identities and budgets while copying. Failure to establish reparse metadata is not treated as proof that a path is ordinary.
 
 Dev Container routing requires an actual project `.devcontainer/devcontainer.json` or root `.devcontainer.json`; an empty `.devcontainer/` directory is not configuration evidence, and linked/reparse configuration is rejected at the WDA read boundary.
 

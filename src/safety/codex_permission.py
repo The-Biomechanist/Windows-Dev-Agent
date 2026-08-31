@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
 
 from src.observability.trace import append_event, resolve_log_file
 from src.runtime_paths import resolve_codex_data_dir
-from src.safety.codex_gate import _shared_tool_name
+from src.safety.codex_gate import _project_scope_error, _shared_tool_name
 from src.safety.classifier import classify_tool_call
 
 PREFIX = "mcp__windows_dev_agent__"
@@ -33,28 +33,6 @@ PROJECT_PLAN_ARGS = {
     PREFIX + "capability_run": "cwd",
     PREFIX + "workflow_plan": "cwd",
 }
-
-
-def _inside_session_cwd(event: dict[str, Any], tool_input: dict[str, Any], argument: str) -> bool:
-    """Prove an absolute caller path resolves no broader than Codex's active cwd."""
-    session_cwd = event.get("cwd")
-    requested = tool_input.get(argument)
-    if not isinstance(session_cwd, str) or not isinstance(requested, str):
-        return False
-    session_cwd = session_cwd.strip()
-    requested = requested.strip()
-    if not session_cwd or not requested:
-        return False
-    try:
-        root = Path(session_cwd).expanduser().resolve()
-        requested_path = Path(requested).expanduser()
-        if not requested_path.is_absolute():
-            return False
-        candidate = requested_path.resolve()
-        candidate.relative_to(root)
-        return True
-    except (OSError, RuntimeError, ValueError):
-        return False
 
 
 def _safe_plan_request(event: dict[str, Any], tool_name: str, tool_input: dict[str, Any]) -> bool:
@@ -66,7 +44,7 @@ def _safe_plan_request(event: dict[str, Any], tool_name: str, tool_input: dict[s
         return False
     if tool_name.endswith("capability_run") and tool_input.get("execute") is True:
         return False
-    return _inside_session_cwd(event, tool_input, project_arg)
+    return _project_scope_error(event, tool_name, tool_input) is None
 
 
 def evaluate_permission_request(event: dict[str, Any], *, log_file: Optional[Path] = None) -> Optional[dict[str, Any]]:
