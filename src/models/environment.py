@@ -78,15 +78,21 @@ class DevDrive:
 class VirtualizationInfo:
     hyper_v_available: Optional[bool] = None
     hyper_v_state: str = "unknown"
+    # wsl_installed means the Windows WSL control plane is installed.  A usable
+    # linux_compatibility route additionally requires policy permission and a
+    # valid registered default distribution, represented by wsl_available.
     wsl_installed: Optional[bool] = None
+    wsl_available: Optional[bool] = None
+    wsl_default_distro: Optional[str] = None
     wsl_version: Optional[str] = None
     wsl_distros: List[str] = field(default_factory=list)
     windows_sandbox_available: Optional[bool] = None
     windows_sandbox_state: str = "unknown"
+    dev_drive_inventory_state: str = "unknown"
     dev_drives: List[DevDrive] = field(default_factory=list)
 
     def has_wsl(self) -> bool:
-        return self.wsl_installed is True
+        return self.wsl_available is True
 
     def has_hyper_v(self) -> bool:
         return self.hyper_v_available is True
@@ -213,10 +219,13 @@ class EnvironmentSnapshot:
                 "hyper_v_available": self.virtualization.hyper_v_available,
                 "hyper_v_state": self.virtualization.hyper_v_state,
                 "wsl_installed": self.virtualization.wsl_installed,
+                "wsl_available": self.virtualization.wsl_available,
+                "wsl_default_distro": self.virtualization.wsl_default_distro,
                 "wsl_version": self.virtualization.wsl_version,
                 "wsl_distros": list(self.virtualization.wsl_distros),
                 "windows_sandbox_available": self.virtualization.windows_sandbox_available,
                 "windows_sandbox_state": self.virtualization.windows_sandbox_state,
+                "dev_drive_inventory_state": self.virtualization.dev_drive_inventory_state,
                 "dev_drives": [
                     {
                         "drive_letter": drive.drive_letter,
@@ -247,7 +256,7 @@ class EnvironmentSnapshot:
             "editors": vars(self.editors),
             "probe_states": {
                 "hyper_v": availability_state(self.virtualization.hyper_v_available),
-                "wsl": availability_state(self.virtualization.wsl_installed),
+                "wsl": availability_state(self.virtualization.wsl_available),
                 "windows_sandbox": availability_state(self.virtualization.windows_sandbox_available),
                 "winget": availability_state(self.development_tools.winget_available),
                 "git": availability_state(self.development_tools.git_available),
