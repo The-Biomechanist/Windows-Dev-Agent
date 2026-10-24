@@ -60,6 +60,7 @@ def test_codex_mcp_uses_callable_namespace_and_host_bound_execution_policy():
     for tool in (
         "tool_discover", "workflow_plan", "package_search", "ecosystem_scan", "mcp_audit",
         "capability_run", "package_install", "sandbox_run",
+        "incident_collect", "incident_execute", "incident_undo",
     ):
         assert server["tools"][tool]["approval_mode"] == "prompt"
 
@@ -67,7 +68,7 @@ def test_codex_mcp_uses_callable_namespace_and_host_bound_execution_policy():
 def test_all_shared_skills_have_codex_frontmatter_names():
     skill_dirs = sorted(path for path in (ROOT / "skills").iterdir() if path.is_dir())
     assert {path.name for path in skill_dirs} == {
-        "ecosystem-defrag", "env-inspect", "package-install", "sandbox-run", "win-setup", "workflow-plan",
+        "ecosystem-defrag", "env-inspect", "incident-response", "package-install", "sandbox-run", "win-setup", "workflow-plan",
     }
     for directory in skill_dirs:
         text = (directory / "SKILL.md").read_text(encoding="utf-8")
