@@ -1,6 +1,6 @@
 # Windows Dev Agent
 
-Windows-native developer orchestration for **Claude Code and Codex**, built around one shared runtime and six shared procedural skills.
+Windows-native developer orchestration for **Claude Code and Codex**, built around one shared runtime and seven shared procedural skills.
 
 Version **0.4.4** builds on 0.4.3. It makes the Claude adapter work from a project other than the plugin checkout: the plugin MCP server launches with `PYTHONPATH` from `${CLAUDE_PLUGIN_ROOT}`, the project boundary comes from the host-exported `CLAUDE_PROJECT_DIR`, and audit outcomes are derived from the host's real tool-response shape. Workflow planning surfaces a lexical match as a candidate for confirmation rather than selecting it as a route. Hard denials are limited to system-scale destruction, and the audit summary states its scope. Codex is not re-verified in this release.
 
@@ -9,6 +9,8 @@ Version 0.4.3 built on 0.4.2 and closed host/runtime authority and outcome seams
 ## Who this is for, and what it does not do
 
 This plugin is for a developer who already runs Claude Code on Windows and wants guardrails and structured tools for shell and package mutations. It is not a setup assistant for a non-technical user: installing it needs git and `claude --plugin-dir`, every mutation shows a host approval prompt, and the Codex adapter has not been exercised in a live Codex install.
+
+Incident response (`incident_collect`, `incident_execute`, `incident_undo`; see `docs/INCIDENT_RESPONSE.md`) is written as a plain-language flow for a person who is worried about a compromise. Its Python core is unit-tested, but its PowerShell operations have not run on Windows yet, so treat it as unverified until they have.
 
 Known limits: `workflow_plan` surfaces a lexical candidate for you to confirm and never selects a route. Shell command outcomes are not recorded in the audit; only MCP calls and approval decisions are.
 
@@ -52,6 +54,7 @@ Host adapters own only packaging, path binding, permission integration, and host
 | `sandbox-run` | Select WSL, a project Dev Container, or Windows Sandbox from the required execution property. |
 | `win-setup` | Repair missing or broken Windows development prerequisites with the smallest native change. |
 | `ecosystem-defrag` | Inventory concrete agent/tool overlap and plan or execute a reversible consolidation. |
+| `incident-response` | Investigate a suspected compromise in plain language, then change anything only through a reviewed plan. |
 
 Claude's `/windows-dev-agent:env`, `/windows-dev-agent:plan`, and `/windows-dev-agent:defrag` commands are thin adapters to those canonical skills. Codex consumes the same skills directly.
 
@@ -85,7 +88,7 @@ Bundled Codex hooks are an **optional trusted layer**. Codex does not automatica
 
 ## MCP surface
 
-Both adapters expose the same ten tools:
+Both adapters expose the same thirteen tools:
 
 | Tool | Purpose |
 | --- | --- |
@@ -99,6 +102,9 @@ Both adapters expose the same ten tools:
 | `ecosystem_scan` | Project-local agent/tool inventory by default; optional broader host inventory. |
 | `logs_query` | Query bounded retained WDA audit metadata across every readable retained segment. |
 | `mcp_audit` | Inspect project MCP configuration by default; broader reads are explicit. |
+| `incident_collect` | Read-only evidence collection for a suspected compromise: processes, startup entries, Defender status, proxy, and hosts file. Needs no prompt and changes nothing. |
+| `incident_execute` | Validate, or apply one reviewed incident plan. Only reversible actions exist; the host approves the whole plan before it runs. |
+| `incident_undo` | Reverse the completed steps of one incident execution, newest first, with host approval. |
 
 ## Authority model
 
@@ -121,7 +127,7 @@ The Claude `PreToolUse` hook is tightening-only:
 - read-only / reversible → no WDA decision; Claude's normal policy remains authoritative;
 - approval-required / checkpoint → `ask`;
 - forbidden → `deny`;
-- it never returns `allow`.
+- it returns `allow` only for `incident_collect`, the read-only evidence collection described in `docs/INCIDENT_RESPONSE.md`.
 
 Project-local ecosystem/MCP inspection is classified separately from broader host reads, but Claude Code's own normal permission flow remains authoritative for both.
 

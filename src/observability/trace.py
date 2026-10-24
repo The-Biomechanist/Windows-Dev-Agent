@@ -79,9 +79,9 @@ def _may_execute_external_process(payload: dict[str, Any], tool_input: dict[str,
     establish what actually happened. It must therefore be conservative.
     """
     tool_name = _short_tool_name(payload)
-    if tool_name in {"capability_run", "package_install", "sandbox_run"}:
+    if tool_name in {"capability_run", "package_install", "sandbox_run", "incident_execute", "incident_undo"}:
         return bool(tool_input.get("execute", False))
-    if tool_name in {"env_inspect", "tool_discover", "package_search"}:
+    if tool_name in {"env_inspect", "tool_discover", "package_search", "incident_collect"}:
         return True
     if tool_name == "ecosystem_scan":
         return bool(tool_input.get("include_host", False))

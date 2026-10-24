@@ -50,6 +50,9 @@ jobs:
               "ecosystem_scan",
               "logs_query",
               "mcp_audit",
+              "incident_collect",
+              "incident_execute",
+              "incident_undo",
           ]
 
           for host, handle in (("claude", claude_handle), ("codex", codex_handle)):

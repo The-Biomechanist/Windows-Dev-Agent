@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(Bash|PowerShell|mcp__(windows-dev-agent|plugin_windows-dev-agent_windows-dev-agent)__(tool_discover|package_search|capability_run|package_install|sandbox_run|ecosystem_scan|mcp_audit))$",
+        "matcher": "^(Bash|PowerShell|mcp__(windows-dev-agent|plugin_windows-dev-agent_windows-dev-agent)__(tool_discover|package_search|capability_run|package_install|sandbox_run|ecosystem_scan|mcp_audit|incident_collect|incident_execute|incident_undo))$",
         "hooks": [
           {
             "type": "command",
