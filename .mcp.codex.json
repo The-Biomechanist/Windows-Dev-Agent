@@ -14,9 +14,6 @@
       "logs_query": {"approval_mode": "approve"},
       "ecosystem_scan": {"approval_mode": "prompt"},
       "mcp_audit": {"approval_mode": "prompt"},
-      "incident_collect": {"approval_mode": "prompt"},
-      "incident_execute": {"approval_mode": "prompt"},
-      "incident_undo": {"approval_mode": "prompt"},
       "capability_run": {"approval_mode": "prompt"},
       "package_install": {"approval_mode": "prompt"},
       "sandbox_run": {"approval_mode": "prompt"}

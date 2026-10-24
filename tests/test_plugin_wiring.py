@@ -57,10 +57,7 @@ def test_pretool_hook_covers_shell_mutations_and_broader_mcp_reads():
     matcher = re.compile(config["hooks"]["PreToolUse"][0]["matcher"])
     assert matcher.search("PowerShell")
     assert matcher.search("Bash")
-    for name in (
-        "package_install", "sandbox_run", "capability_run", "ecosystem_scan", "mcp_audit",
-        "incident_collect", "incident_execute", "incident_undo",
-    ):
+    for name in ("package_install", "sandbox_run", "capability_run", "ecosystem_scan", "mcp_audit"):
         assert matcher.search(INSTALLED_PREFIX + name)
 
 

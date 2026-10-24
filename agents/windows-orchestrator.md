@@ -21,7 +21,7 @@ The bundled Claude Code `PreToolUse` hook covers Bash, native PowerShell, and th
 
 The hook is tightening-only over Claude Code's native permission system:
 
-- it returns `permissionDecision: allow` only for `incident_collect`, read-only evidence collection;
+- it never returns `permissionDecision: allow`;
 - `read-only` and `reversible` classifications make no plugin permission decision;
 - `approval-required` and `checkpoint` actions return `permissionDecision: ask`;
 - `forbidden` actions return `permissionDecision: deny`;
@@ -49,9 +49,6 @@ The implemented tools are:
 - `ecosystem_scan` — project inventory by default, explicit host-wide inventory when needed;
 - `logs_query` — query minimal persistent audit metadata with unknown outcomes preserved;
 - `mcp_audit` — inspect project MCP config by default, broader reads only when explicitly requested.
-- `incident_collect` — read-only evidence collection for a suspected compromise, no prompt;
-- `incident_execute` — validate, or apply one reviewed incident plan with host approval; only reversible actions;
-- `incident_undo` — reverse the completed steps of one incident execution, with host approval.
 
 Do not claim `workflow_execute`, `sandbox_create`, Hyper-V execution, or other MCP tools that are not in `tools/list`.
 
