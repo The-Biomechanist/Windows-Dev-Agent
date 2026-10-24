@@ -44,7 +44,17 @@ APPROVAL_PATTERNS = [
 ]
 FORBIDDEN_PATTERNS = [
     re.compile(r"\b(format\s+[a-z]:|diskpart\b|bcdedit\b|cipher\s+/w:)", re.I),
+    re.compile(r"\b(Format-Volume|Clear-Disk|Initialize-Disk|Remove-Partition)\b", re.I),
     re.compile(r"\bRemove-Item\b.*(HKLM:|C:\\Windows\\System32)", re.I),
+    re.compile(r"\breg\s+delete\s+HKLM\b", re.I),
+    # Recursive deletes at a drive root or a system tree. Project-local cleanup
+    # such as `rd /s /q build` stays approval-required rather than denied.
+    re.compile(
+        r"\b(rd|rmdir|del|erase|Remove-Item)\b"
+        r"(?=.*(?:/s\b|-Recurse\b))"
+        r"(?=.*(?:\b[A-Za-z]:\\?(?:\s|$|[\"'*])|\b[A-Za-z]:\\(?:Windows|Users|Program Files|ProgramData)\b))",
+        re.I,
+    ),
 ]
 DYNAMIC_SHELL = re.compile(r"(;|\r|\n|&&|\|\||\||>|<|\$\(|@\(|`|(?<!&)&(?!&))")
 MCP_PREFIXES = (

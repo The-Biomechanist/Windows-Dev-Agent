@@ -123,6 +123,7 @@ def main() -> int:
         print(f"Last known failed execution: {summary['last_failure_tool']}")
     if summary["last_denied_tool"]:
         print(f"Last denied request: {summary['last_denied_tool']}")
+    print("Scope: MCP tool calls and approval decisions. Shell command outcomes are not recorded.")
     print("=" * 43)
     return 0
 

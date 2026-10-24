@@ -28,7 +28,7 @@
   "test-python": {
     "description": "Run the Python test suite with pytest.",
     "safety": "reversible",
-    "tags": ["python", "test"],
+    "tags": ["python", "test", "pytest"],
     "tools": [
       {"name": "pytest", "argv": ["pytest"]}
     ]

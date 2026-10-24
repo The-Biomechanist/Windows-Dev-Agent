@@ -423,8 +423,9 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
         else:
             matched_candidate = top[0]
             if matched_candidate.get("available_tool"):
-                selection_status = "selected"
-                selected = matched_candidate
+                # Lexical overlap is evidence, not intent. Surface the strongest
+                # candidate for the model to confirm; never present it as the route.
+                selection_status = "candidate"
             else:
                 selection_status = "matched_unavailable"
                 route_discriminator = {
@@ -451,6 +452,13 @@ async def handle_workflow_plan(args: dict[str, Any]) -> dict[str, Any]:
         route_action = f"Select capability {selected['capability']}"
         execute_action = "Execute the selected capability or explicitly authorized tool path"
         execute_safety = selected["safety_class"]
+    elif selection_status == "candidate" and matched_candidate:
+        route_action = (
+            f"Candidate {matched_candidate['capability']} has the strongest lexical evidence; "
+            "confirm it matches the requested intent before using it as the route"
+        )
+        execute_action = "Execute only after the candidate is confirmed against the task"
+        execute_safety = matched_candidate["safety_class"]
     elif selection_status == "ambiguous":
         route_action = "Preserve the tied top capability candidates and obtain a semantic discriminator before selecting one"
         execute_action = "Do not execute until the routing ambiguity is resolved"

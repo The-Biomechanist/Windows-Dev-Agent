@@ -4,6 +4,12 @@ Windows-native developer orchestration for **Claude Code and Codex**, built arou
 
 Version **0.4.3** builds on 0.4.2 and closes host/runtime authority and outcome seams: Claude project-scoped tools are contained to the host-supplied project root, Codex plan shortcuts require authoritative session scope, Codex's MCP timeout covers the runtime execution ceiling, discovery failures remain canonical degraded snapshots, external-process audit outcomes preserve uncertainty, and WinGet installs are noninteractive and bound to the reviewed source.
 
+## Who this is for, and what it does not do
+
+This plugin is for a developer who already runs Claude Code on Windows and wants guardrails and structured tools for shell and package mutations. It is not a setup assistant for a non-technical user: installing it needs git and `claude --plugin-dir`, every mutation shows a host approval prompt, and the Codex adapter has not been exercised in a live Codex install.
+
+Known limits: `workflow_plan` surfaces a lexical candidate for you to confirm and never selects a route. Shell command outcomes are not recorded in the audit; only MCP calls and approval decisions are.
+
 ## Architecture
 
 ```text
