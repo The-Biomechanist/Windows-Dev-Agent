@@ -3,10 +3,9 @@
     "windows-dev-agent": {
       "command": "python",
       "args": ["-m", "src.claude_server"],
-      "cwd": "${CLAUDE_PLUGIN_ROOT}",
       "env": {
-        "WINDOWS_DEV_AGENT_DATA_DIR": "${CLAUDE_PLUGIN_DATA}",
-        "WINDOWS_DEV_AGENT_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
+        "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}",
+        "WINDOWS_DEV_AGENT_DATA_DIR": "${CLAUDE_PLUGIN_DATA}"
       },
       "description": "Claude Code adapter for the shared Windows Dev Agent runtime. Exposes environment inspection, capability routing, workflow planning, package setup, isolation, ecosystem inventory, and audit tools."
     }

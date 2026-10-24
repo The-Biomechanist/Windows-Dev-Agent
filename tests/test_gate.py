@@ -85,3 +85,33 @@ def test_project_mcp_audit_defers_but_host_or_arbitrary_file_reads_ask():
     assert _decision(tool, {"include_host": False}) is None
     assert _decision(tool, {"include_host": True}) == "ask"
     assert _decision(tool, {"config_path": "C:\\other\\mcp.json"}) == "ask"
+
+
+def test_git_output_option_writes_a_file_and_requires_host_permission():
+    assert gate.classify_shell("git status --short") == "read-only"
+    assert gate.classify_shell("git log --output=C:\\Users\\me\\out.txt") == "approval-required"
+    assert gate.classify_shell("git diff --output out.patch") == "approval-required"
+
+
+def test_system_scale_recursive_deletes_and_disk_operations_are_forbidden():
+    for command in (
+        "rd /s /q C:\\",
+        "rd /s /q C:\\Users",
+        "rmdir /s /q C:\\Windows",
+        "Remove-Item -Recurse -Force C:\\",
+        "Remove-Item -Recurse C:\\Users\\me",
+        "Format-Volume -DriveLetter C",
+        "Clear-Disk -Number 0",
+        "reg delete HKLM\\SOFTWARE\\X /f",
+    ):
+        assert gate.classify_shell(command) == "forbidden", command
+
+
+def test_project_local_cleanup_requires_approval_not_denial():
+    for command in (
+        "rd /s /q build",
+        "Remove-Item -Recurse .\\build",
+        "rd /s /q C:\\repo\\build",
+        "reg delete HKCU\\Software\\X /f",
+    ):
+        assert gate.classify_shell(command) == "approval-required", command

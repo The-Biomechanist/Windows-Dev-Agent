@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.discovery.discovery import EnvironmentDiscovery
 from src.models.environment import (
     DevDrive,
@@ -19,6 +21,12 @@ from src.models.environment import (
     VirtualizationInfo,
     availability_state,
 )
+
+
+@pytest.fixture(autouse=True)
+def system_powershell(monkeypatch):
+    """These tests exercise the process-boundary contract with a mocked run, not a real Windows host."""
+    monkeypatch.setattr("src.discovery.discovery._system_powershell", lambda: Path("powershell.exe"))
 
 
 MOCK_DISCOVERY_OUTPUT = {

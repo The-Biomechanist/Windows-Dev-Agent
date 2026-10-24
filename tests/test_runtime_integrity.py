@@ -154,7 +154,8 @@ def test_workflow_plan_does_not_select_from_generic_identity_words_alone(tmp_pat
     assert result["candidate_capabilities"][0]["discriminating_score"] == 0
 
 
-def test_workflow_plan_can_select_from_discriminating_identity_evidence(tmp_path: Path, monkeypatch):
+def test_workflow_plan_surfaces_lexical_match_as_candidate_not_route(tmp_path: Path, monkeypatch):
+    # Shared-token overlap is not intent: "install git" must never become a selected read-only route.
     capabilities = {
         "test-python": _capability("test-python", tag="python", tool="pytest"),
         "test-dotnet": _capability("test-dotnet", tag="dotnet", tool="dotnet"),
@@ -164,9 +165,11 @@ def test_workflow_plan_can_select_from_discriminating_identity_evidence(tmp_path
 
     result = run(server.handle_workflow_plan({"task": "run the Python tests", "cwd": str(tmp_path)}))
 
-    assert result["selection_status"] == "selected"
-    assert result["selected_candidate"]["capability"] == "test-python"
-    assert "python" in result["selected_candidate"]["discriminating_matches"]
+    assert result["selection_status"] == "candidate"
+    assert result["selected_candidate"] is None
+    assert result["matched_candidate"]["capability"] == "test-python"
+    assert "python" in result["matched_candidate"]["discriminating_matches"]
+    assert result["phases"][1]["action"].startswith("Candidate test-python")
 
 
 def test_workflow_plan_returns_all_candidates_not_only_first_three(tmp_path: Path, monkeypatch):

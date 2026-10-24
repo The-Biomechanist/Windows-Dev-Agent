@@ -6,7 +6,15 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from src import claude_server
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_claude_project(monkeypatch):
+    """Host-exported CLAUDE_PROJECT_DIR from a parent session must not leak into these tests."""
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
 
 def run(coro):
@@ -125,3 +133,29 @@ def test_nonproject_tool_does_not_require_project_binding(monkeypatch):
 
     assert error is None
     assert normalized == request
+
+
+def test_project_root_falls_back_to_host_exported_claude_project_dir(monkeypatch, tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.delenv("WINDOWS_DEV_AGENT_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+
+    normalized, error = claude_server._bind_project_scope(
+        _call("workflow_plan", {"task": "run tests"})
+    )
+
+    assert error is None
+    assert normalized["params"]["arguments"]["cwd"] == str(project.resolve())
+
+
+def test_unexpanded_project_placeholder_fails_closed_with_diagnosis(monkeypatch):
+    monkeypatch.delenv("WINDOWS_DEV_AGENT_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "${CLAUDE_PROJECT_DIR}")
+
+    normalized, error = claude_server._bind_project_scope(
+        _call("workflow_plan", {"task": "run tests"})
+    )
+
+    assert normalized is None
+    assert "unexpanded placeholder" in error

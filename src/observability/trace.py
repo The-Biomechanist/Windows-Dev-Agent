@@ -39,6 +39,9 @@ def history_log_files(log_file: Path) -> list[Path]:
 
 
 def _decode_result_payload(response: Any) -> Optional[dict[str, Any]]:
+    # Claude Code delivers MCP tool_response as the bare content-block list.
+    if isinstance(response, list):
+        response = {"content": response}
     if isinstance(response, dict):
         if isinstance(response.get("status"), str):
             return response

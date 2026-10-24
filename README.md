@@ -2,7 +2,15 @@
 
 Windows-native developer orchestration for **Claude Code and Codex**, built around one shared runtime and six shared procedural skills.
 
-Version **0.4.3** builds on 0.4.2 and closes host/runtime authority and outcome seams: Claude project-scoped tools are contained to the host-supplied project root, Codex plan shortcuts require authoritative session scope, Codex's MCP timeout covers the runtime execution ceiling, discovery failures remain canonical degraded snapshots, external-process audit outcomes preserve uncertainty, and WinGet installs are noninteractive and bound to the reviewed source.
+Version **0.4.4** builds on 0.4.3. It makes the Claude adapter work from a project other than the plugin checkout: the plugin MCP server launches with `PYTHONPATH` from `${CLAUDE_PLUGIN_ROOT}`, the project boundary comes from the host-exported `CLAUDE_PROJECT_DIR`, and audit outcomes are derived from the host's real tool-response shape. Workflow planning surfaces a lexical match as a candidate for confirmation rather than selecting it as a route. Hard denials are limited to system-scale destruction, and the audit summary states its scope. Codex is not re-verified in this release.
+
+Version 0.4.3 built on 0.4.2 and closed host/runtime authority and outcome seams: Claude project-scoped tools are contained to the host-supplied project root, Codex plan shortcuts require authoritative session scope, Codex's MCP timeout covers the runtime execution ceiling, discovery failures remain canonical degraded snapshots, external-process audit outcomes preserve uncertainty, and WinGet installs are noninteractive and bound to the reviewed source.
+
+## Who this is for, and what it does not do
+
+This plugin is for a developer who already runs Claude Code on Windows and wants guardrails and structured tools for shell and package mutations. It is not a setup assistant for a non-technical user: installing it needs git and `claude --plugin-dir`, every mutation shows a host approval prompt, and the Codex adapter has not been exercised in a live Codex install.
+
+Known limits: `workflow_plan` surfaces a lexical candidate for you to confirm and never selects a route. Shell command outcomes are not recorded in the audit; only MCP calls and approval decisions are.
 
 ## Architecture
 
@@ -19,7 +27,7 @@ shared core
         │
         ├── Claude Code adapter
         │     .claude-plugin/plugin.json
-        │     .mcp.json
+        │     config/claude.mcp.json
         │     src/claude_server.py
         │     agents/  commands/  hooks/hooks.json
         │
@@ -57,13 +65,15 @@ From a checkout:
 claude --plugin-dir .
 ```
 
-`.mcp.json` keeps three identities separate:
+`config/claude.mcp.json` (declared by `.claude-plugin/plugin.json`) keeps three identities separate:
 
-- `${CLAUDE_PLUGIN_ROOT}` — immutable plugin code/config;
+- `${CLAUDE_PLUGIN_ROOT}` — immutable plugin code, supplied as `PYTHONPATH` so the server imports from any session directory;
 - `${CLAUDE_PLUGIN_DATA}` — persistent cache/audit data;
-- `${CLAUDE_PROJECT_DIR}` — active project boundary.
+- `CLAUDE_PROJECT_DIR` — active project boundary, read from the environment Claude Code exports to the server process (it is not templated in config).
 
-Project-scoped Claude MCP calls are normalized to that host-supplied project root or one of its descendants. Relative project paths are interpreted under `${CLAUDE_PROJECT_DIR}`; an arbitrary sibling/outside directory is rejected.
+The config deliberately lives outside the repo root. A root `.mcp.json` is also loaded as project-scoped config, where the `${CLAUDE_PLUGIN_*}` variables are undefined.
+
+Project-scoped Claude MCP calls are normalized to that host-supplied project root or one of its descendants. Relative project paths are interpreted under the host project root; an arbitrary sibling/outside directory is rejected.
 
 ### Codex / ChatGPT desktop
 
