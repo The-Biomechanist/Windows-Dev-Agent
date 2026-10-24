@@ -1,8 +1,10 @@
 """Claude Code PreToolUse safety classifier for Windows Dev Agent.
 
-This hook only tightens Claude Code's native permission system: forbidden
-effective actions are denied, known approval-required actions ask, and ordinary
-read/reversible actions defer to the host. It never returns ``allow``.
+Forbidden effective actions are denied, approval-required actions ask, and
+ordinary read/reversible actions defer to the host. The single exception is
+``incident_collect``: a read-only evidence collection that changes nothing on the
+machine, which is allowed without a prompt so that first response is not blocked.
+Nothing else is ever allowed here.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.capabilities import CapabilityConfigError, load_capabilities
+from src.incident.model import summarize_request
 from src.observability.trace import append_event, resolve_log_file
 
 READ_ONLY_PATTERNS = [
@@ -117,6 +120,12 @@ def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
     # These are pure in-process/built-in reads. tool_discover and package_search
     # intentionally stay approval-required because they execute PATH-resolved
     # binaries/package managers even though their requested effect is diagnostic.
+    # Evidence collection is the only autonomous action: read-only, no side effects
+    # beyond an evidence record in the data directory.
+    if short_name == "incident_collect":
+        return "autonomous"
+    if short_name in {"incident_execute", "incident_undo"}:
+        return "approval-required" if bool(tool_input.get("execute", False)) else "read-only"
     if short_name in {"env_inspect", "workflow_plan", "logs_query"}:
         return "read-only"
     if short_name in {"tool_discover", "package_search"}:
@@ -138,6 +147,8 @@ def classify_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
 
 
 def _permission_decision(safety_class: str) -> tuple[Optional[str], str]:
+    if safety_class == "autonomous":
+        return "allow", "Windows Dev Agent collected read-only evidence without a prompt. Nothing on the machine was changed."
     if safety_class == "forbidden":
         return "deny", "Windows Dev Agent blocked a forbidden action. Change the task boundary explicitly before retrying."
     if safety_class in {"approval-required", "checkpoint"}:
@@ -152,6 +163,8 @@ def evaluate_hook_event(event: dict[str, Any], *, log_file: Optional[Path] = Non
         tool_input = {}
     safety_class = classify_tool_call(tool_name, tool_input)
     decision, reason = _permission_decision(safety_class)
+    if decision == "ask" and _mcp_short_name(tool_name) == "incident_execute":
+        reason = f"{reason} {summarize_request(tool_input)}"
     try:
         append_event(
             {

@@ -21,8 +21,9 @@ def test_tools_list_exposes_exact_runtime_surface_and_no_fake_approval_field():
     assert names == [
         "env_inspect", "tool_discover", "capability_run", "workflow_plan", "package_search",
         "package_install", "sandbox_run", "ecosystem_scan", "logs_query", "mcp_audit",
+        "incident_collect", "incident_execute", "incident_undo",
     ]
-    for name in ("capability_run", "package_install", "sandbox_run"):
+    for name in ("capability_run", "package_install", "sandbox_run", "incident_execute"):
         assert "user_approved" not in _tool(name)["inputSchema"]["properties"]
 
 
