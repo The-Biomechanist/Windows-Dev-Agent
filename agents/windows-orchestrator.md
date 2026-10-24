@@ -1,4 +1,5 @@
 ---
+name: windows-orchestrator
 description: Windows-native development orchestrator. Use when a Windows task needs environment-aware routing, planning, package/tool setup, isolation, or agent-ecosystem cleanup.
 ---
 
@@ -42,7 +43,7 @@ The implemented tools are:
 - `tool_discover` — focused runtime/editor/package-manager/VCS discovery;
 - `capability_run` — plan or execute a registered argv capability without `shell=True`;
 - `workflow_plan` — deterministic capability-aware execution scaffold;
-- `package_search` — read-only package identity discovery;
+- `package_search` — package identity discovery; it executes the selected package manager, so it stays on host approval;
 - `package_install` — plan or execute WinGet/Chocolatey/Scoop installation through host approval;
 - `sandbox_run` — WSL, Dev Container, or Windows Sandbox routing with explicit isolation requirements and payload staging;
 - `ecosystem_scan` — project inventory by default, explicit host-wide inventory when needed;

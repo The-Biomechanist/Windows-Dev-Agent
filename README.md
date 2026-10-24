@@ -19,7 +19,7 @@ shared core
         │
         ├── Claude Code adapter
         │     .claude-plugin/plugin.json
-        │     .mcp.json
+        │     config/claude.mcp.json
         │     src/claude_server.py
         │     agents/  commands/  hooks/hooks.json
         │
@@ -57,13 +57,15 @@ From a checkout:
 claude --plugin-dir .
 ```
 
-`.mcp.json` keeps three identities separate:
+`config/claude.mcp.json` (declared by `.claude-plugin/plugin.json`) keeps three identities separate:
 
-- `${CLAUDE_PLUGIN_ROOT}` — immutable plugin code/config;
+- `${CLAUDE_PLUGIN_ROOT}` — immutable plugin code, supplied as `PYTHONPATH` so the server imports from any session directory;
 - `${CLAUDE_PLUGIN_DATA}` — persistent cache/audit data;
-- `${CLAUDE_PROJECT_DIR}` — active project boundary.
+- `CLAUDE_PROJECT_DIR` — active project boundary, read from the environment Claude Code exports to the server process (it is not templated in config).
 
-Project-scoped Claude MCP calls are normalized to that host-supplied project root or one of its descendants. Relative project paths are interpreted under `${CLAUDE_PROJECT_DIR}`; an arbitrary sibling/outside directory is rejected.
+The config deliberately lives outside the repo root. A root `.mcp.json` is also loaded as project-scoped config, where the `${CLAUDE_PLUGIN_*}` variables are undefined.
+
+Project-scoped Claude MCP calls are normalized to that host-supplied project root or one of its descendants. Relative project paths are interpreted under the host project root; an arbitrary sibling/outside directory is rejected.
 
 ### Codex / ChatGPT desktop
 

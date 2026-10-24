@@ -85,3 +85,9 @@ def test_project_mcp_audit_defers_but_host_or_arbitrary_file_reads_ask():
     assert _decision(tool, {"include_host": False}) is None
     assert _decision(tool, {"include_host": True}) == "ask"
     assert _decision(tool, {"config_path": "C:\\other\\mcp.json"}) == "ask"
+
+
+def test_git_output_option_writes_a_file_and_requires_host_permission():
+    assert gate.classify_shell("git status --short") == "read-only"
+    assert gate.classify_shell("git log --output=C:\\Users\\me\\out.txt") == "approval-required"
+    assert gate.classify_shell("git diff --output out.patch") == "approval-required"

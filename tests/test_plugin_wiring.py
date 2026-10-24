@@ -21,14 +21,21 @@ def test_manifest_and_runtime_version_match_release():
     assert "minClaudeCodeVersion" not in manifest
 
 
-def test_mcp_server_binds_plugin_data_and_project_roots():
-    config = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
+def test_claude_mcp_config_is_plugin_scoped_and_host_bound():
+    manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    assert manifest["mcpServers"] == "./config/claude.mcp.json"
+    # A root .mcp.json is also loaded as project-scoped config, where plugin variables are undefined.
+    assert not (ROOT / ".mcp.json").exists()
+    config = json.loads((ROOT / "config" / "claude.mcp.json").read_text(encoding="utf-8"))
     server = config["mcpServers"]["windows-dev-agent"]
     assert server["command"] == "python"
     assert server["args"] == ["-m", "src.claude_server"]
-    assert server["cwd"] == "${CLAUDE_PLUGIN_ROOT}"
+    # Plugin servers do not start in the plugin root, so the import root must come from env.
+    assert "cwd" not in server
+    assert server["env"]["PYTHONPATH"] == "${CLAUDE_PLUGIN_ROOT}"
     assert server["env"]["WINDOWS_DEV_AGENT_DATA_DIR"] == "${CLAUDE_PLUGIN_DATA}"
-    assert server["env"]["WINDOWS_DEV_AGENT_PROJECT_DIR"] == "${CLAUDE_PROJECT_DIR}"
+    # The project root is host-exported; a templated value is unexpanded in project scope.
+    assert not any("PROJECT_DIR" in key for key in server["env"])
 
 
 def test_hook_scripts_are_rooted_and_use_persistent_plugin_data():

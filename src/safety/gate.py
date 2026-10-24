@@ -35,6 +35,8 @@ APPROVAL_PATTERNS = [
     re.compile(r"\b(winget|choco|scoop)\s+(install|upgrade|uninstall)\b", re.I),
     re.compile(r"\b(pip|uv|npm|pnpm|yarn|cargo)\s+(install|add|remove|uninstall|update|upgrade)\b", re.I),
     re.compile(r"\bgit\s+(push|commit|merge|rebase|reset|clean)\b", re.I),
+    # Diff/log options such as --output=<file> write to an arbitrary path.
+    re.compile(r"(^|\s)--output(=|\s|$)", re.I),
     re.compile(r"\bgh\s+(pr\s+create|pr\s+merge|release\s+create)\b", re.I),
     re.compile(r"\b(reg\s+(add|delete)|Set-Item(Property)?\b|New-Item(Property)?\b|Remove-Item\b|Enable-WindowsOptionalFeature\b|Disable-WindowsOptionalFeature\b)", re.I),
     re.compile(r"\b(Invoke-Expression|Start-Process)\b", re.I),

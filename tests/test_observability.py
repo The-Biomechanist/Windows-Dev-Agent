@@ -96,3 +96,11 @@ def test_unfiltered_audit_is_explicit_history_surface(tmp_path: Path):
     log = tmp_path / "agent.log"
     log.write_text(json.dumps({"session_id": "a", "event": "PostToolUse", "execution_outcome": "unknown"}) + "\n", encoding="utf-8")
     assert len(audit_report.load_events(log)) == 1
+
+
+def test_host_list_shaped_tool_response_establishes_outcome():
+    # Claude Code delivers MCP tool_response as the bare content-block list.
+    response = [{"type": "text", "text": json.dumps({"status": "completed", "succeeded": True, "returncode": 0})}]
+    event = trace.event_from_hook(_hook({"capability": "inspect-git", "execute": True}, response))
+    assert event["execution_outcome"] == "succeeded"
+    assert event["result_status"] == "completed"

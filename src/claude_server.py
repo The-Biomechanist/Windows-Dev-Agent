@@ -1,6 +1,7 @@
 """Claude Code host adapter for the shared Windows Dev Agent MCP runtime.
 
-Claude supplies the active project root through ``WINDOWS_DEV_AGENT_PROJECT_DIR``.
+Claude supplies the active project root through ``CLAUDE_PROJECT_DIR`` (or the
+explicit ``WINDOWS_DEV_AGENT_PROJECT_DIR`` override used by tests and other hosts).
 Project-scoped tool arguments may select that directory or a descendant, but may
 not replace the host-owned project boundary with an arbitrary filesystem path.
 Relative project paths are interpreted under the host-owned project root.
@@ -47,9 +48,16 @@ def _invalid_tool_result(request_id: Any, error: str) -> dict[str, Any]:
 
 
 def _claude_project_root() -> tuple[Optional[Path], Optional[str]]:
-    raw = os.environ.get("WINDOWS_DEV_AGENT_PROJECT_DIR", "").strip()
+    # Claude Code exports CLAUDE_PROJECT_DIR into the MCP server process. An
+    # unexpanded ${...} placeholder means a config layer failed to substitute it.
+    raw = (
+        os.environ.get("WINDOWS_DEV_AGENT_PROJECT_DIR", "").strip()
+        or os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+    )
     if not raw:
         return None, "Claude project directory was not supplied by the host"
+    if "${" in raw:
+        return None, f"Claude project directory was an unexpanded placeholder: {raw}"
     root = Path(raw).expanduser().resolve()
     if not root.is_dir():
         return None, f"Claude project directory is not a directory: {root}"

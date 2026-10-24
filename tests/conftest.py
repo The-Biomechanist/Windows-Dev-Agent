@@ -15,3 +15,9 @@ def temp_cache_dir(tmp_path):
     cache_dir = tmp_path / ".cache"
     cache_dir.mkdir()
     return cache_dir
+
+
+@pytest.fixture(autouse=True)
+def isolated_data_dir(tmp_path, monkeypatch):
+    """Keep audit and environment-cache writes out of the working tree."""
+    monkeypatch.setenv("WINDOWS_DEV_AGENT_DATA_DIR", str(tmp_path / "data"))

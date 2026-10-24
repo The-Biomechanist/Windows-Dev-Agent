@@ -8,5 +8,6 @@
   "homepage": "https://github.com/The-Biomechanist/Windows-Dev-Agent",
   "repository": "https://github.com/The-Biomechanist/Windows-Dev-Agent",
   "license": "MIT",
-  "keywords": ["windows", "powershell", "winget", "wsl", "sandbox", "agentic", "orchestration", "defrag"]
+  "keywords": ["windows", "powershell", "winget", "wsl", "sandbox", "agentic", "orchestration", "defrag"],
+  "mcpServers": "./config/claude.mcp.json"
 }
